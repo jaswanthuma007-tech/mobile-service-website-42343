@@ -2,7 +2,7 @@ import os
 
 from flask import request
 from flask.views import MethodView
-from flask_smorest import Blueprint
+from flask_smorest import Blueprint, abort
 
 from .. import db
 from ..schemas import (
@@ -10,7 +10,12 @@ from ..schemas import (
     AdminBookingsResponseSchema,
     BookingRequestSchema,
     BookingResponseSchema,
+    BookingServicesResponseSchema,
+    BookingUpdateRequestSchema,
+    BookingUpdateResponseSchema,
+    BrandsResponseSchema,
     ContactResponseSchema,
+    ModelsResponseSchema,
     PincodeCheckResponseSchema,
     ServicesResponseSchema,
     SubmitFormRequestSchema,
@@ -103,6 +108,43 @@ class Services(MethodView):
     def get(self):
         """Return a list of services shown on the Services section."""
         return {"services": db.list_services()}
+
+
+@blp.route("/brands")
+class Brands(MethodView):
+    """Device brand catalog for the booking flow."""
+
+    @blp.response(200, BrandsResponseSchema)
+    def get(self):
+        """Return available brands for step-1 (Select Brand)."""
+        return {"brands": db.list_brands()}
+
+
+@blp.route("/models")
+class Models(MethodView):
+    """Device model catalog for the booking flow."""
+
+    @blp.response(200, ModelsResponseSchema)
+    def get(self):
+        """Return models for step-2 (Select Model).
+
+        Query params:
+        - brand: selected brand name
+        """
+        brand = (request.args.get("brand") or "").strip()
+        if not brand:
+            abort(400, message="brand query param is required")
+        return {"models": db.list_models_for_brand(brand)}
+
+
+@blp.route("/booking/services")
+class BookingServices(MethodView):
+    """Repair service options for step-3 (Select Repair Service)."""
+
+    @blp.response(200, BookingServicesResponseSchema)
+    def get(self):
+        """Return selectable repair services (icons + price hints)."""
+        return {"services": db.list_booking_services()}
 
 
 @blp.route("/about")
@@ -212,6 +254,56 @@ class Bookings(MethodView):
             pincode=booking_data["pincode"].strip(),
         )
         return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
+
+
+@blp.route("/book")
+class BookAlias(MethodView):
+    """Alias endpoint for create booking (matches requested POST /book)."""
+
+    @blp.arguments(BookingRequestSchema)
+    @blp.response(201, BookingResponseSchema)
+    def post(self, booking_data):
+        """Create a booking (alias for /api/bookings)."""
+        new_id = db.create_booking(
+            name=booking_data["name"].strip(),
+            phone=booking_data["phone"].strip(),
+            pincode=booking_data["pincode"].strip(),
+        )
+        return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
+
+
+@blp.route("/booking/<int:booking_id>")
+class BookingUpdate(MethodView):
+    """Update booking with brand/model/service selections (same Booking ID)."""
+
+    @blp.arguments(BookingUpdateRequestSchema)
+    @blp.response(200, BookingUpdateResponseSchema)
+    def put(self, update_payload, booking_id: int):
+        """Update booking fields used by the multi-step flow.
+
+        Path params:
+        - booking_id
+
+        JSON body (any subset):
+        - brand: string
+        - model: string
+        - service: string (comma-separated; frontend may send joined values)
+
+        Returns:
+        - booking: updated booking
+        """
+        brand = update_payload.get("brand")
+        model = update_payload.get("model")
+        service = update_payload.get("service")
+        updated = db.update_booking_device_selection(
+            booking_id=int(booking_id),
+            brand=(brand.strip() if isinstance(brand, str) else None),
+            model=(model.strip() if isinstance(model, str) else None),
+            service=(service.strip() if isinstance(service, str) else None),
+        )
+        if not updated:
+            abort(404, message="Booking not found")
+        return {"booking": updated}
 
 
 @blp.route("/admin/bookings")
