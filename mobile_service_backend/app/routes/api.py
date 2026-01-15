@@ -1,16 +1,40 @@
+import os
+
+from flask import request
 from flask.views import MethodView
 from flask_smorest import Blueprint
 
 from .. import db
 from ..schemas import (
     AboutResponseSchema,
+    AdminBookingsResponseSchema,
+    BookingRequestSchema,
+    BookingResponseSchema,
     ContactResponseSchema,
+    PincodeCheckResponseSchema,
     ServicesResponseSchema,
     SubmitFormRequestSchema,
     SubmitFormResponseSchema,
 )
 
 blp = Blueprint("Mobile Service API", "mobile_service_api", url_prefix="/api", description="Mobile Service Website APIs")
+
+
+def _require_admin(request_obj) -> None:
+    """Simple shared-secret auth for admin endpoints (optional).
+
+    If ADMIN_API_KEY is set in environment, require header `X-Admin-Key`.
+    If not set, admin endpoints are accessible (dev-friendly).
+    """
+    admin_key = os.environ.get("ADMIN_API_KEY")
+    if not admin_key:
+        return
+    provided = request_obj.headers.get("X-Admin-Key", "")
+    if provided != admin_key:
+        # flask-smorest will turn this into a 401 JSON error
+        from flask_smorest import abort
+
+        abort(401, message="Unauthorized")
 
 
 @blp.route("/services")
@@ -86,3 +110,67 @@ class SubmitForm(MethodView):
             problem=form_data["problem"].strip(),
         )
         return {"id": new_id, "message": "Thanks! We received your request and will contact you shortly."}
+
+
+@blp.route("/pincode/check")
+class PincodeCheck(MethodView):
+    """Pincode validation endpoint used by the booking form UI."""
+
+    @blp.response(200, PincodeCheckResponseSchema)
+    def get(self):
+        """Validate the provided pincode.
+
+        Query params:
+        - pincode: 6-digit pincode
+
+        Note: In a real system this would query a serviceability table.
+        For now, we accept any 6-digit pincode starting with 1-9.
+        """
+        pincode = (request.args.get("pincode") or "").strip()
+        if len(pincode) == 6 and pincode.isdigit() and not pincode.startswith("0"):
+            return {"valid": True, "message": "Great! Service is available in your area."}
+        return {"valid": False, "message": "Please enter a valid 6-digit pincode."}
+
+
+@blp.route("/bookings")
+class Bookings(MethodView):
+    """Booking form submission endpoint (hero form)."""
+
+    @blp.arguments(BookingRequestSchema)
+    @blp.response(201, BookingResponseSchema)
+    def post(self, booking_data):
+        """Create a booking.
+
+        Expects JSON body:
+        - name, phone, pincode
+
+        Returns:
+        - id: created booking ID
+        - message: user-facing message
+        """
+        new_id = db.create_booking(
+            name=booking_data["name"].strip(),
+            phone=booking_data["phone"].strip(),
+            pincode=booking_data["pincode"].strip(),
+        )
+        return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
+
+
+@blp.route("/admin/bookings")
+class AdminBookings(MethodView):
+    """Admin endpoint to list recent bookings."""
+
+    @blp.response(200, AdminBookingsResponseSchema)
+    def get(self):
+        """List recent bookings.
+
+        Optional query params:
+        - limit: max rows (1..1000)
+        """
+        _require_admin(request)
+        limit = request.args.get("limit", "200")
+        try:
+            limit_int = int(limit)
+        except ValueError:
+            limit_int = 200
+        return {"bookings": db.list_bookings(limit=limit_int)}

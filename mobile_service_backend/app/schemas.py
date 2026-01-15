@@ -48,3 +48,35 @@ class SubmitFormRequestSchema(Schema):
 class SubmitFormResponseSchema(Schema):
     id = fields.Int(required=True, metadata={"description": "Created request ID"})
     message = fields.Str(required=True, metadata={"description": "User-facing success message"})
+
+
+class PincodeCheckResponseSchema(Schema):
+    valid = fields.Bool(required=True, metadata={"description": "Whether the pincode is serviceable"})
+    message = fields.Str(required=True, metadata={"description": "User-facing validation message"})
+
+
+class BookingRequestSchema(Schema):
+    name = fields.Str(required=True, validate=validate.Length(min=1), metadata={"description": "Customer name"})
+    phone = fields.Str(required=True, validate=validate.Length(min=7), metadata={"description": "Customer phone"})
+    pincode = fields.Str(
+        required=True,
+        validate=validate.Regexp(r"^[0-9]{6}$", error="Pincode must be exactly 6 digits."),
+        metadata={"description": "6-digit pincode"},
+    )
+
+
+class BookingResponseSchema(Schema):
+    id = fields.Int(required=True, metadata={"description": "Created booking ID"})
+    message = fields.Str(required=True, metadata={"description": "User-facing success message"})
+
+
+class BookingSchema(Schema):
+    id = fields.Int(required=True, metadata={"description": "Booking ID"})
+    name = fields.Str(required=True, metadata={"description": "Customer name"})
+    phone = fields.Str(required=True, metadata={"description": "Customer phone"})
+    pincode = fields.Str(required=True, metadata={"description": "6-digit pincode"})
+    created_at = fields.Str(required=True, metadata={"description": "Creation timestamp"})
+
+
+class AdminBookingsResponseSchema(Schema):
+    bookings = fields.List(fields.Nested(BookingSchema), required=True, metadata={"description": "Recent bookings"})

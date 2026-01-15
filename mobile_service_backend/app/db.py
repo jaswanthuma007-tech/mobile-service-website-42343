@@ -58,6 +58,19 @@ def init_schema() -> None:
         """
     )
 
+    # New: bookings table matching the new hero booking form (name/phone/pincode).
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bookings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            phone TEXT NOT NULL,
+            pincode TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS site_content (
@@ -129,3 +142,41 @@ def create_customer_request(name: str, phone: str, email: str, mobile_model: str
     new_id = int(cur.lastrowid)
     conn.close()
     return new_id
+
+
+# PUBLIC_INTERFACE
+def create_booking(name: str, phone: str, pincode: str) -> int:
+    """Insert a booking row (hero booking form) and return the new ID."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO bookings (name, phone, pincode)
+        VALUES (?, ?, ?)
+        """,
+        (name, phone, pincode),
+    )
+    conn.commit()
+    new_id = int(cur.lastrowid)
+    conn.close()
+    return new_id
+
+
+# PUBLIC_INTERFACE
+def list_bookings(limit: int = 200) -> list[dict]:
+    """Return recent bookings for the admin panel (most recent first)."""
+    safe_limit = max(1, min(int(limit or 200), 1000))
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, name, phone, pincode, created_at
+        FROM bookings
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (safe_limit,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
