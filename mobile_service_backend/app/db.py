@@ -1,0 +1,131 @@
+import os
+import sqlite3
+
+
+# PUBLIC_INTERFACE
+def get_db_path() -> str:
+    """Return the SQLite database path from environment.
+
+    Uses SQLITE_DB if present; otherwise falls back to a local myapp.db for dev.
+    """
+    return os.environ.get("SQLITE_DB") or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "myapp.db")
+    )
+
+
+def _connect() -> sqlite3.Connection:
+    """Create a SQLite connection with row access by column name."""
+    conn = sqlite3.connect(get_db_path())
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+# PUBLIC_INTERFACE
+def init_schema() -> None:
+    """Ensure required tables exist.
+
+    This is intentionally minimal and idempotent to support easy startup in dev/CI.
+    """
+    conn = _connect()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS services (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            icon TEXT,
+            price_hint TEXT,
+            sort_order INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS customer_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            phone TEXT NOT NULL,
+            email TEXT NOT NULL,
+            mobile_model TEXT NOT NULL,
+            problem TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS site_content (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    # Seed site content defaults if missing
+    defaults = {
+        "about_description": "We provide practical, honest mobile repair and troubleshooting. Our goal is to get your device working with clear options and fair pricing.",
+        "contact_hours": "Mon–Sat: 9am–7pm • Sun: 11am–4pm",
+        "contact_phone": "+1 (555) 123-4567",
+        "contact_email": "support@example.com",
+    }
+    for k, v in defaults.items():
+        cur.execute("INSERT OR IGNORE INTO site_content (key, value) VALUES (?, ?)", (k, v))
+
+    conn.commit()
+    conn.close()
+
+
+# PUBLIC_INTERFACE
+def list_services() -> list[dict]:
+    """Return services in stable display order."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, title, description, icon, price_hint
+        FROM services
+        ORDER BY sort_order ASC, id ASC
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# PUBLIC_INTERFACE
+def get_site_content(keys: list[str]) -> dict:
+    """Fetch key/value site content entries for the given keys."""
+    if not keys:
+        return {}
+    placeholders = ",".join(["?"] * len(keys))
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(f"SELECT key, value FROM site_content WHERE key IN ({placeholders})", keys)
+    rows = cur.fetchall()
+    conn.close()
+    return {r["key"]: r["value"] for r in rows}
+
+
+# PUBLIC_INTERFACE
+def create_customer_request(name: str, phone: str, email: str, mobile_model: str, problem: str) -> int:
+    """Insert a customer request row and return the new ID."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO customer_requests (name, phone, email, mobile_model, problem)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (name, phone, email, mobile_model, problem),
+    )
+    conn.commit()
+    new_id = int(cur.lastrowid)
+    conn.close()
+    return new_id
