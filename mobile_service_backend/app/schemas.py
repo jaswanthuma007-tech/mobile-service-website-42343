@@ -75,8 +75,40 @@ class BookingSchema(Schema):
     name = fields.Str(required=True, metadata={"description": "Customer name"})
     phone = fields.Str(required=True, metadata={"description": "Customer phone"})
     pincode = fields.Str(required=True, metadata={"description": "6-digit pincode"})
+    status = fields.Str(required=True, metadata={"description": "Repair status (Pending/In Progress/Completed)"})
+    notes = fields.Str(required=False, allow_none=True, metadata={"description": "Optional admin notes"})
     created_at = fields.Str(required=True, metadata={"description": "Creation timestamp"})
+    updated_at = fields.Str(required=False, allow_none=True, metadata={"description": "Last update timestamp"})
 
 
 class AdminBookingsResponseSchema(Schema):
     bookings = fields.List(fields.Nested(BookingSchema), required=True, metadata={"description": "Recent bookings"})
+
+
+class AdminLoginRequestSchema(Schema):
+    username = fields.Str(required=True, validate=validate.Length(min=1), metadata={"description": "Admin username"})
+    password = fields.Str(required=True, validate=validate.Length(min=1), metadata={"description": "Admin password"})
+
+
+class AdminLoginResponseSchema(Schema):
+    token = fields.Str(required=True, metadata={"description": "Admin session token"})
+    message = fields.Str(required=True, metadata={"description": "User-facing success message"})
+
+
+class AdminUpdateBookingStatusRequestSchema(Schema):
+    status = fields.Str(
+        required=True,
+        validate=validate.OneOf(["Pending", "In Progress", "Completed"]),
+        metadata={"description": "New status value"},
+    )
+    notes = fields.Str(required=False, allow_none=True, metadata={"description": "Optional notes"})
+
+
+class AdminUpdateBookingStatusResponseSchema(Schema):
+    booking = fields.Nested(BookingSchema, required=True, metadata={"description": "Updated booking"})
+
+
+class TrackStatusResponseSchema(Schema):
+    found = fields.Bool(required=True, metadata={"description": "Whether a booking was found"})
+    booking = fields.Nested(BookingSchema, required=False, allow_none=True, metadata={"description": "Found booking"})
+    message = fields.Str(required=True, metadata={"description": "User-facing message"})

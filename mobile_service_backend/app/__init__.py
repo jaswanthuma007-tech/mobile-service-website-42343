@@ -6,6 +6,7 @@ from flask_smorest import Api
 
 from . import db
 from .routes.api import blp as api_blp
+from .routes.admin_tracking import blp as admin_tracking_blp
 from .routes.health import blp as health_blp
 
 
@@ -31,3 +32,4 @@ app.config["OPENAPI_SWAGGER_UI_URL"] = "https://cdn.jsdelivr.net/npm/swagger-ui-
 api = Api(app)
 api.register_blueprint(health_blp)
 api.register_blueprint(api_blp)
+api.register_blueprint(admin_tracking_blp)

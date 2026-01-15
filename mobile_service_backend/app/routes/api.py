@@ -20,21 +20,79 @@ from ..schemas import (
 blp = Blueprint("Mobile Service API", "mobile_service_api", url_prefix="/api", description="Mobile Service Website APIs")
 
 
-def _require_admin(request_obj) -> None:
-    """Simple shared-secret auth for admin endpoints (optional).
-
-    If ADMIN_API_KEY is set in environment, require header `X-Admin-Key`.
-    If not set, admin endpoints are accessible (dev-friendly).
-    """
+def _require_admin_api_key(request_obj) -> None:
+    """Require admin shared-secret header if ADMIN_API_KEY is configured."""
     admin_key = os.environ.get("ADMIN_API_KEY")
     if not admin_key:
         return
     provided = request_obj.headers.get("X-Admin-Key", "")
     if provided != admin_key:
-        # flask-smorest will turn this into a 401 JSON error
         from flask_smorest import abort
 
         abort(401, message="Unauthorized")
+
+
+def _admin_tokens_from_env() -> set[str]:
+    """Return configured admin tokens from ADMIN_TOKENS env var (comma-separated)."""
+    raw = os.environ.get("ADMIN_TOKENS", "").strip()
+    if not raw:
+        return set()
+    return {t.strip() for t in raw.split(",") if t.strip()}
+
+
+def _issue_admin_token(username: str) -> str:
+    """Issue an admin token.
+
+    Implementation note: uses a static configured token list if provided; otherwise derives
+    a simple token from username + ADMIN_API_KEY (dev-friendly). For production, use JWT.
+    """
+    tokens = _admin_tokens_from_env()
+    if tokens:
+        # If tokens are pre-configured, just return the first for simplicity.
+        return sorted(tokens)[0]
+
+    # Fallback: deterministic token based on env key; avoids adding new dependencies.
+    secret = os.environ.get("ADMIN_API_KEY", "dev-admin-key")
+    return f"admin:{username}:{secret}"
+
+
+def _require_admin_token(request_obj) -> None:
+    """Require Bearer token for admin session endpoints if admin auth is enabled.
+
+    Rules:
+    - If ADMIN_LOGIN_ENABLED is not set/false and ADMIN_API_KEY is also not set, allow (dev).
+    - If ADMIN_LOGIN_ENABLED is true OR ADMIN_API_KEY is set, require:
+        Authorization: Bearer <token>
+      Tokens allowed:
+        - any token in ADMIN_TOKENS (comma-separated), OR
+        - token that matches the fallback token format returned by _issue_admin_token for
+          the default admin username (or any username, if using the fallback).
+    """
+    login_enabled = (os.environ.get("ADMIN_LOGIN_ENABLED") or "").strip().lower() in ("1", "true", "yes", "on")
+    admin_key = os.environ.get("ADMIN_API_KEY")
+    if not login_enabled and not admin_key:
+        return
+
+    auth = request_obj.headers.get("Authorization", "")
+    if not auth.lower().startswith("bearer "):
+        from flask_smorest import abort
+
+        abort(401, message="Missing admin token")
+
+    token = auth.split(" ", 1)[1].strip()
+    allowed = _admin_tokens_from_env()
+    if token in allowed:
+        return
+
+    # Accept fallback token pattern for any username (basic).
+    # This is only intended for small demos; production should use JWT.
+    secret = admin_key or "dev-admin-key"
+    if token.endswith(f":{secret}") and token.startswith("admin:"):
+        return
+
+    from flask_smorest import abort
+
+    abort(401, message="Invalid admin token")
 
 
 @blp.route("/services")
@@ -162,12 +220,19 @@ class AdminBookings(MethodView):
 
     @blp.response(200, AdminBookingsResponseSchema)
     def get(self):
-        """List recent bookings.
+        """List recent bookings (admin).
+
+        Auth:
+        - Prefer: Authorization: Bearer <token>
+        - Back-compat: X-Admin-Key if ADMIN_API_KEY is configured
 
         Optional query params:
         - limit: max rows (1..1000)
         """
-        _require_admin(request)
+        # Back-compat: allow the old shared-secret header.
+        _require_admin_api_key(request)
+        _require_admin_token(request)
+
         limit = request.args.get("limit", "200")
         try:
             limit_int = int(limit)

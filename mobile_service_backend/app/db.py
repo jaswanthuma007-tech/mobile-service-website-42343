@@ -58,7 +58,8 @@ def init_schema() -> None:
         """
     )
 
-    # New: bookings table matching the new hero booking form (name/phone/pincode).
+    # New: bookings table matching the hero booking form + repair tracking.
+    # status: Pending | In Progress | Completed
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS bookings (
@@ -66,10 +67,49 @@ def init_schema() -> None:
             name TEXT NOT NULL,
             phone TEXT NOT NULL,
             pincode TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'Pending',
+            notes TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
+
+    # Lightweight schema migration for existing DBs created before status/notes fields existed.
+    # SQLite supports ADD COLUMN; we keep it safe by checking PRAGMA table_info.
+    cur.execute("PRAGMA table_info(bookings)")
+    booking_cols = {r["name"] for r in cur.fetchall()}
+    if "status" not in booking_cols:
+        cur.execute("ALTER TABLE bookings ADD COLUMN status TEXT NOT NULL DEFAULT 'Pending'")
+    if "notes" not in booking_cols:
+        cur.execute("ALTER TABLE bookings ADD COLUMN notes TEXT")
+    if "updated_at" not in booking_cols:
+        cur.execute("ALTER TABLE bookings ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+    # Admin users (simple username/password for the assignment).
+    # In production: store salted hashes. Here we keep it env-configurable and minimal.
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    # Seed a default admin if env vars are provided.
+    # Required env vars (optional):
+    # - ADMIN_DEFAULT_USERNAME
+    # - ADMIN_DEFAULT_PASSWORD
+    default_admin_user = os.environ.get("ADMIN_DEFAULT_USERNAME")
+    default_admin_pass = os.environ.get("ADMIN_DEFAULT_PASSWORD")
+    if default_admin_user and default_admin_pass:
+        cur.execute(
+            "INSERT OR IGNORE INTO admin_users (username, password) VALUES (?, ?)",
+            (default_admin_user, default_admin_pass),
+        )
 
     cur.execute(
         """
@@ -170,7 +210,7 @@ def list_bookings(limit: int = 200) -> list[dict]:
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT id, name, phone, pincode, created_at
+        SELECT id, name, phone, pincode, status, notes, created_at, updated_at
         FROM bookings
         ORDER BY id DESC
         LIMIT ?
@@ -180,3 +220,86 @@ def list_bookings(limit: int = 200) -> list[dict]:
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# PUBLIC_INTERFACE
+def get_booking_by_id(booking_id: int) -> dict | None:
+    """Fetch a booking by ID for tracking."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, name, phone, pincode, status, notes, created_at, updated_at
+        FROM bookings
+        WHERE id = ?
+        """,
+        (int(booking_id),),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+# PUBLIC_INTERFACE
+def get_latest_booking_by_phone(phone: str) -> dict | None:
+    """Fetch the latest booking for a given phone number (normalized by caller)."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, name, phone, pincode, status, notes, created_at, updated_at
+        FROM bookings
+        WHERE phone = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (phone,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+# PUBLIC_INTERFACE
+def update_booking_status(booking_id: int, status: str, notes: str | None = None) -> dict | None:
+    """Update booking status/notes and return updated row, or None if not found."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM bookings WHERE id = ?", (int(booking_id),))
+    exists = cur.fetchone()
+    if not exists:
+        conn.close()
+        return None
+
+    cur.execute(
+        """
+        UPDATE bookings
+        SET status = ?,
+            notes = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (status, notes, int(booking_id)),
+    )
+    conn.commit()
+    conn.close()
+    return get_booking_by_id(int(booking_id))
+
+
+# PUBLIC_INTERFACE
+def verify_admin_credentials(username: str, password: str) -> bool:
+    """Verify admin username/password against the admin_users table."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id
+        FROM admin_users
+        WHERE username = ? AND password = ?
+        LIMIT 1
+        """,
+        (username, password),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return bool(row)
