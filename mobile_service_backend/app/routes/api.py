@@ -1,4 +1,5 @@
 import os
+import re
 
 from flask import request
 from flask.views import MethodView
@@ -23,6 +24,34 @@ from ..schemas import (
 )
 
 blp = Blueprint("Mobile Service API", "mobile_service_api", url_prefix="/api", description="Mobile Service Website APIs")
+
+_PHONE_INVALID_MESSAGE = "Only numbers are allowed. Please enter a valid 10-digit mobile number."
+
+
+def _normalize_and_validate_10_digit_phone(value: str) -> str:
+    """Normalize and validate a phone number to exactly 10 digits.
+
+    Rules (per requirement):
+    - Normalize by stripping all non-digits.
+    - After normalization, the phone must be exactly 10 digits.
+    - On invalid input, raise a 400 with a fixed user-facing message.
+
+    Returns:
+        Normalized 10-digit phone string (digits only).
+    """
+    raw = (value or "").strip()
+    normalized = re.sub(r"\D", "", raw)
+
+    # "Only numbers are allowed" + "valid 10-digit" message is required, even if
+    # user entered punctuation/spaces; we normalize then validate length.
+    if len(normalized) != 10:
+        abort(400, message=_PHONE_INVALID_MESSAGE)
+
+    # Defensive: ensure digits-only (should already be true after regex).
+    if not normalized.isdigit():
+        abort(400, message=_PHONE_INVALID_MESSAGE)
+
+    return normalized
 
 
 def _require_admin_api_key(request_obj) -> None:
@@ -244,13 +273,19 @@ class Bookings(MethodView):
         Expects JSON body:
         - name, phone, pincode
 
+        Phone handling:
+        - Phone is normalized by stripping non-digits.
+        - Phone must normalize to exactly 10 digits, otherwise HTTP 400 is returned.
+
         Returns:
         - id: created booking ID
         - message: user-facing message
         """
+        normalized_phone = _normalize_and_validate_10_digit_phone(booking_data.get("phone") or "")
+
         new_id = db.create_booking(
             name=booking_data["name"].strip(),
-            phone=booking_data["phone"].strip(),
+            phone=normalized_phone,
             pincode=booking_data["pincode"].strip(),
         )
         return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
@@ -263,10 +298,17 @@ class BookAlias(MethodView):
     @blp.arguments(BookingRequestSchema)
     @blp.response(201, BookingResponseSchema)
     def post(self, booking_data):
-        """Create a booking (alias for /api/bookings)."""
+        """Create a booking (alias for /api/bookings).
+
+        Phone handling:
+        - Phone is normalized by stripping non-digits.
+        - Phone must normalize to exactly 10 digits, otherwise HTTP 400 is returned.
+        """
+        normalized_phone = _normalize_and_validate_10_digit_phone(booking_data.get("phone") or "")
+
         new_id = db.create_booking(
             name=booking_data["name"].strip(),
-            phone=booking_data["phone"].strip(),
+            phone=normalized_phone,
             pincode=booking_data["pincode"].strip(),
         )
         return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}

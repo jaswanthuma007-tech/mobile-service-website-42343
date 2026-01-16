@@ -87,7 +87,17 @@ class PincodeCheckResponseSchema(Schema):
 
 class BookingRequestSchema(Schema):
     name = fields.Str(required=True, validate=validate.Length(min=1), metadata={"description": "Customer name"})
-    phone = fields.Str(required=True, validate=validate.Length(min=7), metadata={"description": "Customer phone"})
+    # Note: endpoint normalizes by stripping non-digits; this schema ensures that if the
+    # client sends digits-only, it must be exactly 10. Endpoint still enforces 10 digits
+    # post-normalization and returns a fixed HTTP 400 message.
+    phone = fields.Str(
+        required=True,
+        validate=validate.Regexp(
+            r"^[0-9]{10}$",
+            error="Only numbers are allowed. Please enter a valid 10-digit mobile number.",
+        ),
+        metadata={"description": "Customer phone (10 digits)"},
+    )
     pincode = fields.Str(
         required=True,
         validate=validate.Regexp(r"^[0-9]{6}$", error="Pincode must be exactly 6 digits."),
