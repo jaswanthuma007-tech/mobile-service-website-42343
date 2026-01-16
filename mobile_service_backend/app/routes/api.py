@@ -26,6 +26,8 @@ from ..schemas import (
 blp = Blueprint("Mobile Service API", "mobile_service_api", url_prefix="/api", description="Mobile Service Website APIs")
 
 _PHONE_INVALID_MESSAGE = "Only numbers are allowed. Please enter a valid 10-digit mobile number."
+_PINCODE_INVALID_MESSAGE = "Please enter a valid 6-digit pincode."
+_PINCODE_STRICT_REGEX = re.compile(r"^[0-9]{6}$")
 
 
 def _normalize_and_validate_10_digit_phone(value: str) -> str:
@@ -52,6 +54,19 @@ def _normalize_and_validate_10_digit_phone(value: str) -> str:
         abort(400, message=_PHONE_INVALID_MESSAGE)
 
     return normalized
+
+
+def _validate_strict_6_digit_pincode(value: str) -> str:
+    """Validate pincode as exactly 6 digits (numeric-only) and return trimmed value.
+
+    Backend enforcement requirement:
+    - Must be exactly 6 characters
+    - Must be numeric-only (0-9)
+    """
+    pincode = (value or "").strip()
+    if not _PINCODE_STRICT_REGEX.match(pincode):
+        abort(400, message=_PINCODE_INVALID_MESSAGE)
+    return pincode
 
 
 def _require_admin_api_key(request_obj) -> None:
@@ -282,11 +297,12 @@ class Bookings(MethodView):
         - message: user-facing message
         """
         normalized_phone = _normalize_and_validate_10_digit_phone(booking_data.get("phone") or "")
+        normalized_pincode = _validate_strict_6_digit_pincode(booking_data.get("pincode") or "")
 
         new_id = db.create_booking(
             name=booking_data["name"].strip(),
             phone=normalized_phone,
-            pincode=booking_data["pincode"].strip(),
+            pincode=normalized_pincode,
         )
         return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
 
