@@ -33,6 +33,11 @@ Notes:
 - `GET /api/about` returns about content
 - `GET /api/contact` returns contact info
 - `POST /api/submit_form` stores form submission
+- `GET /api/check-pincode?pincode=XXXXXX` Postal API proxy for pincode validation (cached)
+  - Success: returns `valid=true` and a friendly message including city/district/state when available
+  - Error/unserviceable: returns `valid=false` with `"Service not available in this area."`
+  - Network failure: returns `valid=false` with `"Unable to verify pincode. Please try again."`
+- `GET /api/pincode/check?pincode=XXXXXX` backward-compatible alias for `/api/check-pincode`
 - `POST /api/bookings` create booking
 - `POST /api/book` create booking (alias)
 

@@ -8,6 +8,7 @@ from flask_smorest import Blueprint, abort
 
 from .. import db
 from ..anti_spam import enforce_booking_anti_spam
+from ..pincode_proxy import safe_check_pincode
 from ..schemas import (
     AboutResponseSchema,
     AdminBookingsResponseSchema,
@@ -304,24 +305,41 @@ class SubmitForm(MethodView):
         return {"id": new_id, "message": "Thanks! We received your request and will contact you shortly."}
 
 
-@blp.route("/pincode/check")
-class PincodeCheck(MethodView):
-    """Pincode validation endpoint used by the booking form UI."""
+@blp.route("/check-pincode")
+class CheckPincode(MethodView):
+    """Proxy endpoint to validate a pincode using India's Postal API (with caching)."""
 
     @blp.response(200, PincodeCheckResponseSchema)
     def get(self):
-        """Validate the provided pincode.
+        """Check pincode serviceability via the Postal API.
 
         Query params:
-        - pincode: 6-digit pincode
+        - pincode: 6-digit numeric pincode
 
-        Note: In a real system this would query a serviceability table.
-        For now, we accept any 6-digit pincode starting with 1-9.
+        Behavior:
+        - Validates input strictly (6 digits). If invalid: valid=false with a red-message-friendly text.
+        - Proxies https://api.postalpincode.in/pincode/{PINCODE}
+        - If Postal API Status=Success: valid=true + message includes city/district/state when available.
+        - If Status=Error: valid=false + "Service not available in this area."
+        - If network/other errors: valid=false + "Unable to verify pincode. Please try again."
         """
-        pincode = (request.args.get("pincode") or "").strip()
-        if len(pincode) == 6 and pincode.isdigit() and not pincode.startswith("0"):
-            return {"valid": True, "message": "Great! Service is available in your area."}
-        return {"valid": False, "message": "Please enter a valid 6-digit pincode."}
+        pincode = _validate_strict_6_digit_pincode(request.args.get("pincode") or "")
+        result = safe_check_pincode(pincode)
+        # Schema requires {valid, message}. We keep location internal for now (frontend uses message).
+        return {"valid": bool(result.get("valid")), "message": str(result.get("message") or "")}
+
+
+# Backward-compatible alias: existing frontend calls /api/pincode/check
+@blp.route("/pincode/check")
+class PincodeCheck(MethodView):
+    """Backward-compatible alias for /api/check-pincode."""
+
+    @blp.response(200, PincodeCheckResponseSchema)
+    def get(self):
+        """Alias for /api/check-pincode (do not remove; older clients may still call it)."""
+        pincode = _validate_strict_6_digit_pincode(request.args.get("pincode") or "")
+        result = safe_check_pincode(pincode)
+        return {"valid": bool(result.get("valid")), "message": str(result.get("message") or "")}
 
 
 @blp.route("/bookings")
