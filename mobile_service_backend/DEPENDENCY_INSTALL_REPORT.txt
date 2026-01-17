@@ -1,0 +1,19 @@
+Interpreter used: ./venv/bin/python (Python 3.12.3)
+
+Pre-check:
+- pip check: No broken requirements found.
+- Import test:
+  - FAILED: ModuleNotFoundError: No module named 'requests'
+
+Actions:
+- pip install -r requirements.txt
+  - All requirements already satisfied.
+- Installed missing runtime deps:
+  - requests==2.32.5
+  - python-dotenv==1.2.1
+  - plus transitive deps: urllib3==2.6.3, charset_normalizer==3.4.4
+
+Post-check:
+- Import test:
+  - python -c "import flask, flask_cors, marshmallow, requests; print('deps_ok')"
+  - RESULT: deps_ok
