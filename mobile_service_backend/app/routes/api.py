@@ -7,7 +7,7 @@ from flask.views import MethodView
 from flask_smorest import Blueprint, abort
 
 from .. import db
-from ..anti_spam import RateLimiter
+from ..anti_spam import RateLimiter, enforce_booking_anti_spam
 from ..pincode_proxy import safe_check_pincode
 from ..schemas import (
     AboutResponseSchema,
@@ -385,8 +385,14 @@ class Bookings(MethodView):
         name = (booking_data.get("name") or "").strip()
 
         ip = _get_client_ip()
-        if not _RATE_LIMITER.allow(ip):
-            return {"code": "RATE_LIMITED", "message": "Too many requests. Please wait a moment and try again."}, 429
+        allowed, code, err_msg, duplicate_hint = enforce_booking_anti_spam(
+            ip=ip,
+            name=name,
+            phone_normalized_10=normalized_phone,
+            pincode_normalized_6=normalized_pincode,
+        )
+        if not allowed:
+            return {"code": code, "message": err_msg or "Too many requests."}, 429
 
         try:
             booking_id, reused = db.reuse_or_create_pending_booking_within_window(
@@ -399,9 +405,15 @@ class Bookings(MethodView):
             logger.exception("Database operation failed for POST /api/bookings")
             return {"error": "Database insert failed"}, 500
 
+        # Message rules:
+        # - Always success=true and provide booking_id.
+        # - If same phone+pincode within 60s: show a clear hint (but do not block).
+        # - Reuse-or-create logic remains authoritative for id selection.
         msg = "Booking received! Our team will contact you shortly."
         if reused:
             msg = "Booking already received. Redirecting you to continue device selection."
+        elif duplicate_hint:
+            msg = "We just received a similar booking for this phone number and pincode. If this was accidental, please wait a moment."
 
         return {
             "success": True,
@@ -435,8 +447,14 @@ class BookAlias(MethodView):
         name = (booking_data.get("name") or "").strip()
 
         ip = _get_client_ip()
-        if not _RATE_LIMITER.allow(ip):
-            return {"code": "RATE_LIMITED", "message": "Too many requests. Please wait a moment and try again."}, 429
+        allowed, code, err_msg, duplicate_hint = enforce_booking_anti_spam(
+            ip=ip,
+            name=name,
+            phone_normalized_10=normalized_phone,
+            pincode_normalized_6=normalized_pincode,
+        )
+        if not allowed:
+            return {"code": code, "message": err_msg or "Too many requests."}, 429
 
         try:
             booking_id, reused = db.reuse_or_create_pending_booking_within_window(
@@ -452,6 +470,8 @@ class BookAlias(MethodView):
         msg = "Booking received! Our team will contact you shortly."
         if reused:
             msg = "Booking already received. Redirecting you to continue device selection."
+        elif duplicate_hint:
+            msg = "We just received a similar booking for this phone number and pincode. If this was accidental, please wait a moment."
 
         return {
             "success": True,

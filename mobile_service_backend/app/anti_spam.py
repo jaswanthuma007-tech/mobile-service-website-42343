@@ -120,7 +120,12 @@ class RateLimiter:
 
 
 class DuplicateSubmissionGuard:
-    """Duplicate-submission guard with a fixed cooldown window (in-process).
+    """Duplicate-submission guard with a fixed "hint window" (in-process).
+
+    Important behavior for this project:
+    - This guard MUST NOT block inserts/booking creation.
+    - It is used only to detect "same details submitted recently" so the API can
+      include a user-friendly hint message while still returning success.
 
     Stores last-seen timestamps per dedupe key. Thread-safe.
     """
@@ -136,24 +141,28 @@ class DuplicateSubmissionGuard:
         return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
     # PUBLIC_INTERFACE
-    def check_and_mark(self, raw_key: str) -> bool:
-        """Check duplicate cooldown and mark the key as seen.
+    def check_and_mark_hint(self, raw_key: str) -> bool:
+        """Return whether this submission should show a "duplicate" hint, and mark as seen.
 
         Args:
             raw_key: dedupe key material (should already be normalized).
 
         Returns:
-            True if this submission is allowed (not a duplicate within cooldown),
-            False if it is a duplicate within cooldown.
+            True if a previous submission with the same key occurred within the
+            cooldown window (i.e., show a hint).
+            False otherwise.
+
+        Notes:
+            This function intentionally never blocks. Callers should always proceed
+            with normal insert/reuse-or-create logic.
         """
         key = self._hash_key(raw_key)
         now_ts = _now()
         with self._lock:
             last = self._last_seen.get(key)
-            if last is not None and (now_ts - last) < float(self.cooldown_seconds):
-                return False
+            is_hint = bool(last is not None and (now_ts - last) < float(self.cooldown_seconds))
             self._last_seen[key] = now_ts
-            return True
+            return is_hint
 
     # PUBLIC_INTERFACE
     def cleanup(self, max_age_seconds: int = 24 * 3600) -> None:
@@ -191,21 +200,29 @@ def normalize_pincode_digits(pincode: str) -> str:
 
 
 # PUBLIC_INTERFACE
-def enforce_booking_anti_spam(ip: str, name: str, phone_normalized_10: str, pincode_normalized_6: str) -> tuple[bool, str | None, str | None]:
-    """Enforce rate limiting + duplicate submission cooldown for booking creation.
+def enforce_booking_anti_spam(
+    ip: str, name: str, phone_normalized_10: str, pincode_normalized_6: str
+) -> tuple[bool, str | None, str | None, bool]:
+    """Enforce rate limiting and detect recent duplicate submissions for booking creation.
+
+    Authoritative requirements (current):
+    - Rate limit: 5/min per IP (configurable via RATE_LIMIT_PER_MINUTE), return 429 if exceeded.
+    - Duplicate logic: only consider *same phone + pincode* within 60 seconds
+      (configurable via DUP_SUBMISSION_COOLDOWN_SECONDS).
+    - Duplicate detection MUST NOT block inserts. It only produces a "hint" that
+      callers may surface as a clear message.
 
     Args:
         ip: best-effort client IP string
-        name: customer-provided name (will be normalized for dedupe)
+        name: customer-provided name (unused for dedupe now, kept for compatibility)
         phone_normalized_10: already-normalized and validated 10-digit phone
         pincode_normalized_6: already-normalized and validated 6-digit pincode
 
     Returns:
-        (allowed, error_code, error_message)
-        - If allowed=True => (True, None, None)
-        - If allowed=False => (False, <code>, <message>) where code is one of:
-            - "RATE_LIMITED"
-            - "DUPLICATE_SUBMISSION"
+        (allowed, error_code, error_message, duplicate_hint)
+        - If allowed=True: error_code/message are None; duplicate_hint indicates whether
+          the same phone+pincode was submitted within the cooldown window.
+        - If allowed=False: error_code/message describe the rate-limit rejection.
     """
     # Periodic cleanup (cheap, but keep it light). Not strictly required.
     # Only cleanup occasionally based on time modulo; avoids adding timers.
@@ -218,10 +235,15 @@ def enforce_booking_anti_spam(ip: str, name: str, phone_normalized_10: str, pinc
         logger.debug("Anti-spam cleanup failed", exc_info=True)
 
     if not _RATE_LIMITER.allow(ip):
-        return False, "RATE_LIMITED", "Too many requests. Please wait a moment and try again."
+        return False, "RATE_LIMITED", "Too many requests. Please wait a moment and try again.", False
 
-    dedupe_key = f"{normalize_name_for_dedupe(name)}|{phone_normalized_10}|{pincode_normalized_6}"
-    if not _DUP_GUARD.check_and_mark(dedupe_key):
-        return False, "DUPLICATE_SUBMISSION", "We already received your booking. Please wait a moment before trying again."
+    # Dedupe is now strictly (phone+pincode) per requirement. Name is intentionally excluded.
+    dedupe_key = f"{phone_normalized_10}|{pincode_normalized_6}"
+    duplicate_hint = False
+    try:
+        duplicate_hint = _DUP_GUARD.check_and_mark_hint(dedupe_key)
+    except Exception:
+        # Never break booking flow due to hint detection.
+        duplicate_hint = False
 
-    return True, None, None
+    return True, None, None, duplicate_hint

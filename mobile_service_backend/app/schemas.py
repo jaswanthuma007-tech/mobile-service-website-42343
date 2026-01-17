@@ -106,7 +106,10 @@ class BookingRequestSchema(Schema):
 
 
 class BookingResponseSchema(Schema):
-    id = fields.Str(required=True, metadata={"description": "Created booking ID (UUID)"})
+    success = fields.Bool(required=True, metadata={"description": "Whether booking was accepted"})
+    booking_id = fields.Str(required=True, metadata={"description": "Booking ID (UUID string)"})
+    # Backward compatible field used by older clients
+    id = fields.Str(required=True, metadata={"description": "Created booking ID (UUID) (back-compat)"})
     message = fields.Str(required=True, metadata={"description": "User-facing success message"})
 
 
