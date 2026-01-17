@@ -106,10 +106,7 @@ class BookingRequestSchema(Schema):
 
 
 class BookingResponseSchema(Schema):
-    success = fields.Bool(required=True, metadata={"description": "Whether booking was accepted"})
-    booking_id = fields.Str(required=True, metadata={"description": "Booking ID (UUID string)"})
-    # Backward compatible field used by older clients
-    id = fields.Str(required=True, metadata={"description": "Created booking ID (UUID) (back-compat)"})
+    id = fields.Int(required=True, metadata={"description": "Created booking ID"})
     message = fields.Str(required=True, metadata={"description": "User-facing success message"})
 
 
@@ -124,7 +121,7 @@ class BookingUpdateResponseSchema(Schema):
 
 
 class BookingSchema(Schema):
-    id = fields.Str(required=True, metadata={"description": "Booking ID (UUID)"})
+    id = fields.Int(required=True, metadata={"description": "Booking ID"})
     name = fields.Str(required=True, metadata={"description": "Customer name"})
     phone = fields.Str(required=True, metadata={"description": "Customer phone"})
     pincode = fields.Str(required=True, metadata={"description": "6-digit pincode"})

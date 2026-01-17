@@ -1,20 +1,13 @@
 # Mobile Service Backend (Flask)
 
-Flask backend serving REST APIs for the Mobile Service Website frontend, backed by Supabase Postgres (via supabase-py).
+Flask backend serving REST APIs for the Mobile Service Website frontend.
 
 ## Runs on
 - Port: **3001**
 
 ## Environment Variables
-- `SUPABASE_URL`: Supabase project URL (e.g. `https://<project-ref>.supabase.co`)
-- `SUPABASE_SERVICE_ROLE_KEY`: Supabase service role key (**preferred**, server-side only; do not expose to browser)
-- `SUPABASE_ANON_KEY`: anon/public key (**fallback**) used only if service role key is not provided (may be limited by RLS)
-- `SUPABASE_SCHEMA`: optional schema name (default: `public`)
+- `SQLITE_DB`: path to SQLite file (provided by environment; do not hardcode)
 - `ALLOWED_ORIGINS`: comma-separated list of allowed origins (e.g. `http://localhost:3000,...`)
-
-Notes:
-- Supabase client is initialized **lazily** and will not crash backend startup if keys are missing; DB-backed endpoints may return errors until configured.
-- Health check is available at `GET /health`.
 
 ### Anti-spam / Rate limiting (booking creation)
 Booking creation endpoints (`POST /api/bookings` and `POST /api/book`) include lightweight server-side protections to mitigate spam:
@@ -38,11 +31,6 @@ Notes:
 - `GET /api/about` returns about content
 - `GET /api/contact` returns contact info
 - `POST /api/submit_form` stores form submission
-- `GET /api/check-pincode?pincode=XXXXXX` Postal API proxy for pincode validation (cached)
-  - Success: returns `valid=true` and a friendly message including city/district/state when available
-  - Error/unserviceable: returns `valid=false` with `"Service not available in this area."`
-  - Network failure: returns `valid=false` with `"Unable to verify pincode. Please try again."`
-- `GET /api/pincode/check?pincode=XXXXXX` backward-compatible alias for `/api/check-pincode`
 - `POST /api/bookings` create booking
 - `POST /api/book` create booking (alias)
 

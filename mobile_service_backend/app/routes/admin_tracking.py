@@ -100,13 +100,13 @@ class AdminLogin(MethodView):
         return {"token": token, "message": "Login successful."}
 
 
-@blp.route("/admin/bookings/<string:booking_id>/status")
+@blp.route("/admin/bookings/<int:booking_id>/status")
 class AdminBookingStatus(MethodView):
     """Admin endpoint to update booking status."""
 
     @blp.arguments(AdminUpdateBookingStatusRequestSchema)
     @blp.response(200, AdminUpdateBookingStatusResponseSchema)
-    def put(self, status_payload, booking_id: str):
+    def put(self, status_payload, booking_id: int):
         """Update booking status.
 
         Auth:
@@ -126,7 +126,7 @@ class AdminBookingStatus(MethodView):
         if status not in _STATUS_ALLOWED:
             abort(400, message="Invalid status")
 
-        updated = db.update_booking_status(booking_id=str(booking_id), status=status, notes=notes)
+        updated = db.update_booking_status(booking_id=int(booking_id), status=status, notes=notes)
         if not updated:
             abort(404, message="Booking not found")
 
@@ -157,7 +157,10 @@ class TrackStatus(MethodView):
 
         booking = None
         if booking_id:
-            booking = db.get_booking_by_id(str(booking_id))
+            try:
+                booking = db.get_booking_by_id(int(booking_id))
+            except ValueError:
+                booking = None
         elif phone:
             booking = db.get_latest_booking_by_phone(phone)
 

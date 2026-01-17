@@ -13,9 +13,9 @@ from .routes.health import blp as health_blp
 app = Flask(__name__)
 app.url_map.strict_slashes = False
 
-# NOTE: Do NOT initialize Supabase/DB at import time.
-# We lazy-init after the Flask app is created (below) so the module can be imported
-# safely even if Supabase env vars are not yet configured.
+# Initialize DB layer at startup.
+# With Supabase/Postgres, this validates configuration and performs best-effort seeding.
+db.init_schema()
 
 # CORS: Prefer explicit allowed origins from env (comma-separated), fallback to '*'.
 allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*")
@@ -34,11 +34,3 @@ api = Api(app)
 api.register_blueprint(health_blp)
 api.register_blueprint(api_blp)
 api.register_blueprint(admin_tracking_blp)
-
-# Best-effort DB init (Supabase). If env vars are missing, keep server up so /health works.
-try:
-    db.init_schema()
-except Exception as exc:
-    # Intentionally do not crash the app process at import time/startup.
-    # Individual endpoints that need DB will fail with a clearer message later.
-    app.logger.warning("DB/Supabase init skipped: %s", exc)
