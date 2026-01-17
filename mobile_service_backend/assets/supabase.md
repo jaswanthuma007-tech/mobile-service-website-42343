@@ -111,6 +111,42 @@ If the frontend uses `/api/services` and expects the older catalog:
 - `sort_order` int not null default 0
 - `created_at` timestamptz not null default now()
 
+### 8) serviceable_pincodes
+
+Used to manage pincode-level serviceability.
+
+Columns:
+- `pincode` varchar(6) primary key
+- `serviceable` boolean not null default true
+- `region` text null (optional label like city/zone)
+
+Recommended constraints:
+- `pincode` must be exactly 6 digits (Postgres CHECK constraint)
+
+SQL (create table):
+
+```sql
+create table if not exists public.serviceable_pincodes (
+  pincode varchar(6) primary key,
+  serviceable boolean not null default true,
+  region text null,
+  constraint serviceable_pincodes_pincode_format_chk check (pincode ~ '^[0-9]{6}$')
+);
+```
+
+Seed data (example rows; run once in Supabase SQL editor):
+
+```sql
+insert into public.serviceable_pincodes (pincode, serviceable, region) values
+  ('560001', true,  'Bengaluru Central'),
+  ('110001', true,  'New Delhi Central'),
+  ('400001', true,  'Mumbai Fort'),
+  ('999999', false, 'Test Non-serviceable'),
+  ('000000', false, 'Invalid Format Example (will fail CHECK)');
+```
+
+Note: the last row above (`000000`) is intentionally shown to demonstrate the CHECK constraint; omit it if you want all inserts to succeed.
+
 ---
 
 ## Row Level Security (RLS)
