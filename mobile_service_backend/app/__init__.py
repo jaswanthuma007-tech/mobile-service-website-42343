@@ -13,7 +13,8 @@ from .routes.health import blp as health_blp
 app = Flask(__name__)
 app.url_map.strict_slashes = False
 
-# Initialize SQLite schema at startup (idempotent).
+# Initialize DB layer at startup.
+# With Supabase/Postgres, this validates configuration and performs best-effort seeding.
 db.init_schema()
 
 # CORS: Prefer explicit allowed origins from env (comma-separated), fallback to '*'.
