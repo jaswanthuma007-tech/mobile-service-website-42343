@@ -7,7 +7,7 @@ from flask.views import MethodView
 from flask_smorest import Blueprint, abort
 
 from .. import db
-from ..anti_spam import enforce_booking_anti_spam
+from ..anti_spam import RateLimiter
 from ..pincode_proxy import safe_check_pincode
 from ..schemas import (
     AboutResponseSchema,
@@ -29,6 +29,12 @@ from ..schemas import (
 logger = logging.getLogger(__name__)
 
 blp = Blueprint("Mobile Service API", "mobile_service_api", url_prefix="/api", description="Mobile Service Website APIs")
+
+# Keep rate limiting (token bucket), but remove duplicate-submission blocking.
+_RATE_LIMITER = RateLimiter(
+    per_minute=int(os.environ.get("RATE_LIMIT_PER_MINUTE", "5") or 5),
+    per_hour=int(os.environ.get("RATE_LIMIT_PER_HOUR", "50") or 50),
+)
 
 _PHONE_INVALID_MESSAGE = "Only numbers are allowed. Please enter a valid 10-digit mobile number."
 _PINCODE_INVALID_MESSAGE = "Please enter a valid 6-digit pincode."
@@ -349,7 +355,7 @@ class Bookings(MethodView):
     @blp.arguments(BookingRequestSchema)
     @blp.response(201, BookingResponseSchema)
     def post(self, booking_data):
-        """Create a booking.
+        """Create a booking (or reuse a recent Pending booking for the same phone).
 
         Expects JSON body:
         - name, phone, pincode
@@ -358,20 +364,18 @@ class Bookings(MethodView):
         - Per-IP rate limiting (token bucket) with env-configurable limits:
             * RATE_LIMIT_PER_MINUTE (default 5)
             * RATE_LIMIT_PER_HOUR (default 50)
-          When exceeded: HTTP 429, JSON: { "code": "RATE_LIMITED", "message": "..." }
-        - Duplicate submission cooldown:
-            * If same name+phone+pincode repeats within DUP_SUBMISSION_COOLDOWN_SECONDS (default 60)
-              respond HTTP 409, JSON: { "code": "DUPLICATE_SUBMISSION", "message": "..." }
+          When exceeded: HTTP 429.
 
-        Header signals (log-only):
-        - Missing/suspicious User-Agent or missing Referer are logged but NOT blocked.
+        Duplicate booking behavior (authoritative requirement):
+        - If a booking exists for the same phone in the last 2 minutes AND status=Pending:
+            return that existing booking id (no blocking / no duplicate warning)
+        - Else:
+            create a new booking row.
 
-        Phone handling:
-        - Phone is normalized by stripping non-digits.
-        - Phone must normalize to exactly 10 digits, otherwise HTTP 400 is returned.
-
-        Returns:
-        - id: created booking ID
+        Returns (always success; for frontend redirect flow):
+        - success: true
+        - booking_id: UUID string
+        - id: UUID string (back-compat)
         - message: user-facing message
         """
         _log_suspicious_user_agent_and_referer()
@@ -380,31 +384,31 @@ class Bookings(MethodView):
         normalized_pincode = _validate_strict_6_digit_pincode(booking_data.get("pincode") or "")
         name = (booking_data.get("name") or "").strip()
 
-        allowed, code, msg = enforce_booking_anti_spam(
-            ip=_get_client_ip(),
-            name=name,
-            phone_normalized_10=normalized_phone,
-            pincode_normalized_6=normalized_pincode,
-        )
-        if not allowed:
-            if code == "RATE_LIMITED":
-                return {"code": code, "message": msg}, 429
-            if code == "DUPLICATE_SUBMISSION":
-                return {"code": code, "message": msg}, 409
-            # Defensive fallback.
-            return {"code": "ANTI_SPAM_BLOCKED", "message": "Request blocked. Please try again later."}, 429
+        ip = _get_client_ip()
+        if not _RATE_LIMITER.allow(ip):
+            return {"code": "RATE_LIMITED", "message": "Too many requests. Please wait a moment and try again."}, 429
 
         try:
-            new_id = db.create_booking(
+            booking_id, reused = db.reuse_or_create_pending_booking_within_window(
                 name=name,
                 phone=normalized_phone,
                 pincode=normalized_pincode,
+                window_seconds=120,
             )
         except Exception:
-            logger.exception("Database insert failed for POST /api/bookings")
+            logger.exception("Database operation failed for POST /api/bookings")
             return {"error": "Database insert failed"}, 500
 
-        return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
+        msg = "Booking received! Our team will contact you shortly."
+        if reused:
+            msg = "Booking already received. Redirecting you to continue device selection."
+
+        return {
+            "success": True,
+            "booking_id": booking_id,
+            "id": booking_id,  # backward compatible field used by existing frontend
+            "message": msg,
+        }
 
 
 @blp.route("/book")
@@ -416,14 +420,13 @@ class BookAlias(MethodView):
     def post(self, booking_data):
         """Create a booking (alias for /api/bookings).
 
-        Anti-spam protections: see POST /api/bookings (same behavior/codes).
+        Behavior:
+        - Rate limit per IP (token bucket).
+        - Reuse recent Pending booking within 2 minutes for the same phone.
 
-        Phone handling:
-        - Phone is normalized by stripping non-digits.
-        - Phone must normalize to exactly 10 digits, otherwise HTTP 400 is returned.
-
-        Pincode handling:
-        - Pincode must be exactly 6 digits (strict).
+        Returns:
+        - success=true
+        - booking_id (and id for back-compat)
         """
         _log_suspicious_user_agent_and_referer()
 
@@ -431,30 +434,31 @@ class BookAlias(MethodView):
         normalized_pincode = _validate_strict_6_digit_pincode(booking_data.get("pincode") or "")
         name = (booking_data.get("name") or "").strip()
 
-        allowed, code, msg = enforce_booking_anti_spam(
-            ip=_get_client_ip(),
-            name=name,
-            phone_normalized_10=normalized_phone,
-            pincode_normalized_6=normalized_pincode,
-        )
-        if not allowed:
-            if code == "RATE_LIMITED":
-                return {"code": code, "message": msg}, 429
-            if code == "DUPLICATE_SUBMISSION":
-                return {"code": code, "message": msg}, 409
-            return {"code": "ANTI_SPAM_BLOCKED", "message": "Request blocked. Please try again later."}, 429
+        ip = _get_client_ip()
+        if not _RATE_LIMITER.allow(ip):
+            return {"code": "RATE_LIMITED", "message": "Too many requests. Please wait a moment and try again."}, 429
 
         try:
-            new_id = db.create_booking(
+            booking_id, reused = db.reuse_or_create_pending_booking_within_window(
                 name=name,
                 phone=normalized_phone,
                 pincode=normalized_pincode,
+                window_seconds=120,
             )
         except Exception:
-            logger.exception("Database insert failed for POST /api/book")
+            logger.exception("Database operation failed for POST /api/book")
             return {"error": "Database insert failed"}, 500
 
-        return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
+        msg = "Booking received! Our team will contact you shortly."
+        if reused:
+            msg = "Booking already received. Redirecting you to continue device selection."
+
+        return {
+            "success": True,
+            "booking_id": booking_id,
+            "id": booking_id,  # back-compat
+            "message": msg,
+        }
 
 
 @blp.route("/booking/<string:booking_id>")

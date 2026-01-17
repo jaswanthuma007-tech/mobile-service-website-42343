@@ -1,5 +1,6 @@
 import logging
 from typing import Any
+from datetime import datetime, timezone, timedelta
 
 from .supabase_client import get_supabase_client, get_supabase_schema
 
@@ -297,6 +298,72 @@ def get_latest_booking_by_phone(phone: str) -> dict | None:
         .limit(1)
     )
     return dict(rows[0]) if rows else None
+
+
+def _parse_supabase_ts(value: object) -> datetime | None:
+    """Parse common Supabase timestamp formats into a timezone-aware datetime."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    s = str(value).strip()
+    if not s:
+        return None
+    # Supabase commonly returns ISO strings like: 2026-01-17T06:00:00.123456+00:00 or ...Z
+    try:
+        if s.endswith("Z"):
+            return datetime.fromisoformat(s[:-1]).replace(tzinfo=timezone.utc)
+        dt = datetime.fromisoformat(s)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+# PUBLIC_INTERFACE
+def reuse_or_create_pending_booking_within_window(
+    *,
+    name: str,
+    phone: str,
+    pincode: str,
+    window_seconds: int = 120,
+) -> tuple[str, bool]:
+    """Return a booking id, reusing a recent Pending booking for the same phone when eligible.
+
+    Rules (authoritative requirement):
+    - Look up latest booking by phone.
+    - If latest booking is status='Pending' AND created_at is within the last 2 minutes:
+        reuse it (return existing id, reused=True)
+    - Else:
+        create a new booking row (return new id, reused=False)
+
+    Args:
+        name: customer name
+        phone: normalized 10-digit phone string
+        pincode: normalized 6-digit pincode string
+        window_seconds: reuse window, default 120 seconds.
+
+    Returns:
+        (booking_id, reused)
+    """
+    safe_window = max(1, int(window_seconds or 120))
+    latest = None
+    try:
+        latest = get_latest_booking_by_phone(phone)
+    except Exception:
+        # If read fails (schema/policy issues), fall back to creating a booking so flow doesn't hard-fail.
+        latest = None
+
+    if latest:
+        status = str(latest.get("status") or "").strip() or "Pending"
+        created_at = _parse_supabase_ts(latest.get("created_at"))
+        if status == "Pending" and created_at is not None:
+            now = datetime.now(timezone.utc)
+            if (now - created_at) <= timedelta(seconds=safe_window):
+                return str(latest.get("id")), True
+
+    # Otherwise create a new booking
+    return create_booking(name=name, phone=phone, pincode=pincode), False
 
 
 # PUBLIC_INTERFACE
