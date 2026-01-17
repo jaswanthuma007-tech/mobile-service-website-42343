@@ -1,12 +1,14 @@
 # Mobile Service Backend (Flask)
 
-Flask backend serving REST APIs for the Mobile Service Website frontend.
+Flask backend serving REST APIs for the Mobile Service Website frontend, backed by Supabase Postgres (via supabase-py).
 
 ## Runs on
 - Port: **3001**
 
 ## Environment Variables
-- `SQLITE_DB`: path to SQLite file (provided by environment; do not hardcode)
+- `SUPABASE_URL`: Supabase project URL (e.g. `https://<project-ref>.supabase.co`)
+- `SUPABASE_SERVICE_ROLE_KEY`: Supabase service role key (server-side only; do not expose to browser)
+- `SUPABASE_SCHEMA`: optional schema name (default: `public`)
 - `ALLOWED_ORIGINS`: comma-separated list of allowed origins (e.g. `http://localhost:3000,...`)
 
 ### Anti-spam / Rate limiting (booking creation)
