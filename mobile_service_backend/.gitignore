@@ -25,9 +25,7 @@ instance/
 # PyCharm settings
 .idea/
 
-# SQLite database
-*.sqlite3
-*.db
+
 
 # Coverage reports
 htmlcov/
