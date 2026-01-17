@@ -7,9 +7,14 @@ Flask backend serving REST APIs for the Mobile Service Website frontend, backed 
 
 ## Environment Variables
 - `SUPABASE_URL`: Supabase project URL (e.g. `https://<project-ref>.supabase.co`)
-- `SUPABASE_SERVICE_ROLE_KEY`: Supabase service role key (server-side only; do not expose to browser)
+- `SUPABASE_SERVICE_ROLE_KEY`: Supabase service role key (**preferred**, server-side only; do not expose to browser)
+- `SUPABASE_ANON_KEY`: anon/public key (**fallback**) used only if service role key is not provided (may be limited by RLS)
 - `SUPABASE_SCHEMA`: optional schema name (default: `public`)
 - `ALLOWED_ORIGINS`: comma-separated list of allowed origins (e.g. `http://localhost:3000,...`)
+
+Notes:
+- Supabase client is initialized **lazily** and will not crash backend startup if keys are missing; DB-backed endpoints may return errors until configured.
+- Health check is available at `GET /health`.
 
 ### Anti-spam / Rate limiting (booking creation)
 Booking creation endpoints (`POST /api/bookings` and `POST /api/book`) include lightweight server-side protections to mitigate spam:
