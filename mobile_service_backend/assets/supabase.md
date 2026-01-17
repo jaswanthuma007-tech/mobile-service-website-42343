@@ -38,15 +38,17 @@ Create the following tables in Supabase (SQL editor). Types are suggestions; kee
 ### 1) bookings
 
 **Authoritative requirements (migration attachment):**
-- `id` UUID primary key
+- `id` UUID primary key (default `gen_random_uuid()`)
 - `name` text
 - `phone` varchar(10)
 - `pincode` varchar(6)
-- `brand` text
-- `model` text
-- `service` text
-- `status` text enum-like (Pending, In Progress, Completed)
-- `created_at` timestamp
+- `status` text default `Pending`
+- `created_at` timestamp default `now()`
+
+Backend notes:
+- The Flask backend expects `bookings.id` to be a UUID and returns it to the client as a **string**.
+- If inserts fail (missing table, RLS/policy misconfig, wrong key), the backend will respond with:
+  `{ "error": "Database insert failed" }` and HTTP 500 (and logs will contain details).
 
 Recommended additional columns (optional but useful for admin ops):
 - `updated_at` timestamptz default now()

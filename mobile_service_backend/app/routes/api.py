@@ -394,11 +394,16 @@ class Bookings(MethodView):
             # Defensive fallback.
             return {"code": "ANTI_SPAM_BLOCKED", "message": "Request blocked. Please try again later."}, 429
 
-        new_id = db.create_booking(
-            name=name,
-            phone=normalized_phone,
-            pincode=normalized_pincode,
-        )
+        try:
+            new_id = db.create_booking(
+                name=name,
+                phone=normalized_phone,
+                pincode=normalized_pincode,
+            )
+        except Exception:
+            logger.exception("Database insert failed for POST /api/bookings")
+            return {"error": "Database insert failed"}, 500
+
         return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
 
 
@@ -439,21 +444,26 @@ class BookAlias(MethodView):
                 return {"code": code, "message": msg}, 409
             return {"code": "ANTI_SPAM_BLOCKED", "message": "Request blocked. Please try again later."}, 429
 
-        new_id = db.create_booking(
-            name=name,
-            phone=normalized_phone,
-            pincode=normalized_pincode,
-        )
+        try:
+            new_id = db.create_booking(
+                name=name,
+                phone=normalized_phone,
+                pincode=normalized_pincode,
+            )
+        except Exception:
+            logger.exception("Database insert failed for POST /api/book")
+            return {"error": "Database insert failed"}, 500
+
         return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
 
 
-@blp.route("/booking/<int:booking_id>")
+@blp.route("/booking/<string:booking_id>")
 class BookingUpdate(MethodView):
     """Update booking with brand/model/service selections (same Booking ID)."""
 
     @blp.arguments(BookingUpdateRequestSchema)
     @blp.response(200, BookingUpdateResponseSchema)
-    def put(self, update_payload, booking_id: int):
+    def put(self, update_payload, booking_id: str):
         """Update booking fields used by the multi-step flow.
 
         Path params:
@@ -471,7 +481,7 @@ class BookingUpdate(MethodView):
         model = update_payload.get("model")
         service = update_payload.get("service")
         updated = db.update_booking_device_selection(
-            booking_id=int(booking_id),
+            booking_id=str(booking_id),
             brand=(brand.strip() if isinstance(brand, str) else None),
             model=(model.strip() if isinstance(model, str) else None),
             service=(service.strip() if isinstance(service, str) else None),

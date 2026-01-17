@@ -106,7 +106,7 @@ class BookingRequestSchema(Schema):
 
 
 class BookingResponseSchema(Schema):
-    id = fields.Int(required=True, metadata={"description": "Created booking ID"})
+    id = fields.Str(required=True, metadata={"description": "Created booking ID (UUID)"})
     message = fields.Str(required=True, metadata={"description": "User-facing success message"})
 
 
@@ -121,7 +121,7 @@ class BookingUpdateResponseSchema(Schema):
 
 
 class BookingSchema(Schema):
-    id = fields.Int(required=True, metadata={"description": "Booking ID"})
+    id = fields.Str(required=True, metadata={"description": "Booking ID (UUID)"})
     name = fields.Str(required=True, metadata={"description": "Customer name"})
     phone = fields.Str(required=True, metadata={"description": "Customer phone"})
     pincode = fields.Str(required=True, metadata={"description": "6-digit pincode"})

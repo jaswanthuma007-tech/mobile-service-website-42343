@@ -21,7 +21,8 @@ def _sb() -> Any:
 def _sb_exec(query) -> Any:
     """Execute a supabase-py query and return parsed data.
 
-    supabase-py returns objects that can vary by version. We normalize to `data`.
+    supabase-py returns objects that can vary by version. We normalize to `data` and
+    raise a RuntimeError for `.error`.
     """
     resp = query.execute()
     # supabase-py typically returns APIResponse with `.data` / `.error`
@@ -37,6 +38,8 @@ def _ensure_catalog_seeded() -> None:
 
     Supabase databases are persistent; this is only to keep parity with the previous
     SQLite template (which auto-seeded on startup).
+
+    IMPORTANT: This is best-effort and must never crash the server.
     """
     try:
         brands = _sb_exec(_sb().table(_table("device_brands")).select("id", count="exact").limit(1))
@@ -183,7 +186,10 @@ def get_site_content(keys: list[str]) -> dict:
 
 # PUBLIC_INTERFACE
 def create_customer_request(name: str, phone: str, email: str, mobile_model: str, problem: str) -> int:
-    """Insert a customer request row and return the new ID."""
+    """Insert a customer request row and return the new ID.
+
+    NOTE: customer_requests is expected to use an integer identity/bigint id.
+    """
     inserted = _sb_exec(
         _sb()
         .table(_table("customer_requests"))
@@ -203,25 +209,32 @@ def create_customer_request(name: str, phone: str, email: str, mobile_model: str
 
 
 # PUBLIC_INTERFACE
-def create_booking(name: str, phone: str, pincode: str) -> int:
-    """Insert a booking row (hero booking form) and return the new ID."""
-    inserted = _sb_exec(
-        _sb()
-        .table(_table("bookings"))
-        .insert({"name": name, "phone": phone, "pincode": pincode})
-        .select("id")
-        .single()
-    )
-    return int(inserted["id"])
+def create_booking(name: str, phone: str, pincode: str) -> str:
+    """Insert a booking row (hero booking form) and return the new ID.
+
+    Supabase requirement: bookings.id is UUID, so we return a string UUID.
+    """
+    try:
+        inserted = _sb_exec(
+            _sb()
+            .table(_table("bookings"))
+            .insert({"name": name, "phone": phone, "pincode": pincode})
+            .select("id")
+            .single()
+        )
+        return str(inserted["id"])
+    except Exception as exc:
+        # Log server-side details; caller should map this to a user-friendly message.
+        logger.exception("Supabase insert failed for bookings (name=%r phone=%r pincode=%r): %s", name, phone, pincode, exc)
+        raise
 
 
 # PUBLIC_INTERFACE
 def update_booking_device_selection(
-    booking_id: int, brand: str | None, model: str | None, service: str | None
+    booking_id: str, brand: str | None, model: str | None, service: str | None
 ) -> dict | None:
     """Update booking device/service selection fields and return updated booking, or None if not found."""
-    # Ensure booking exists
-    existing = get_booking_by_id(int(booking_id))
+    existing = get_booking_by_id(str(booking_id))
     if not existing:
         return None
 
@@ -229,9 +242,9 @@ def update_booking_device_selection(
         _sb()
         .table(_table("bookings"))
         .update({"brand": brand, "model": model, "service": service})
-        .eq("id", int(booking_id))
+        .eq("id", str(booking_id))
     )
-    return get_booking_by_id(int(booking_id))
+    return get_booking_by_id(str(booking_id))
 
 
 # PUBLIC_INTERFACE
@@ -242,21 +255,21 @@ def list_bookings(limit: int = 200) -> list[dict]:
         _sb()
         .table(_table("bookings"))
         .select("id,name,phone,pincode,brand,model,service,status,notes,created_at,updated_at")
-        .order("id", desc=True)
+        .order("created_at", desc=True)
         .limit(safe_limit)
     )
     return list(data or [])
 
 
 # PUBLIC_INTERFACE
-def get_booking_by_id(booking_id: int) -> dict | None:
-    """Fetch a booking by ID for tracking/confirmation."""
+def get_booking_by_id(booking_id: str) -> dict | None:
+    """Fetch a booking by ID for tracking/confirmation (UUID string)."""
     try:
         data = _sb_exec(
             _sb()
             .table(_table("bookings"))
             .select("id,name,phone,pincode,brand,model,service,status,notes,created_at,updated_at")
-            .eq("id", int(booking_id))
+            .eq("id", str(booking_id))
             .maybe_single()
         )
         return dict(data) if data else None
@@ -266,7 +279,7 @@ def get_booking_by_id(booking_id: int) -> dict | None:
             _sb()
             .table(_table("bookings"))
             .select("id,name,phone,pincode,brand,model,service,status,notes,created_at,updated_at")
-            .eq("id", int(booking_id))
+            .eq("id", str(booking_id))
             .limit(1)
         )
         return dict(rows[0]) if rows else None
@@ -280,23 +293,21 @@ def get_latest_booking_by_phone(phone: str) -> dict | None:
         .table(_table("bookings"))
         .select("id,name,phone,pincode,brand,model,service,status,notes,created_at,updated_at")
         .eq("phone", phone)
-        .order("id", desc=True)
+        .order("created_at", desc=True)
         .limit(1)
     )
     return dict(rows[0]) if rows else None
 
 
 # PUBLIC_INTERFACE
-def update_booking_status(booking_id: int, status: str, notes: str | None = None) -> dict | None:
+def update_booking_status(booking_id: str, status: str, notes: str | None = None) -> dict | None:
     """Update booking status/notes and return updated row, or None if not found."""
-    existing = get_booking_by_id(int(booking_id))
+    existing = get_booking_by_id(str(booking_id))
     if not existing:
         return None
 
-    _sb_exec(
-        _sb().table(_table("bookings")).update({"status": status, "notes": notes}).eq("id", int(booking_id))
-    )
-    return get_booking_by_id(int(booking_id))
+    _sb_exec(_sb().table(_table("bookings")).update({"status": status, "notes": notes}).eq("id", str(booking_id)))
+    return get_booking_by_id(str(booking_id))
 
 
 # PUBLIC_INTERFACE
