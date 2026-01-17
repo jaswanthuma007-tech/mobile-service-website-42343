@@ -319,3 +319,34 @@ def verify_admin_credentials(username: str, password: str) -> bool:
     if env_user and env_pass and username == env_user and password == env_pass:
         return True
     return False
+
+
+# PUBLIC_INTERFACE
+def is_pincode_serviceable(pincode: str) -> bool:
+    """Return whether the given 6-digit pincode is serviceable.
+
+    Queries Supabase table `serviceable_pincodes` by primary key `pincode`.
+
+    Expected table shape (see assets/supabase.md):
+      - pincode varchar(6) primary key
+      - serviceable boolean not null default true
+
+    Args:
+        pincode: 6-digit pincode string (caller must validate format).
+
+    Returns:
+        True if there is a row for the pincode with serviceable=true.
+        False if row is missing or explicitly serviceable=false.
+    """
+    # Select only the boolean column; limit to 1 for efficiency.
+    rows = _sb_exec(
+        _sb()
+        .table(_table("serviceable_pincodes"))
+        .select("serviceable")
+        .eq("pincode", pincode)
+        .limit(1)
+    )
+    if not rows:
+        return False
+    row = rows[0] or {}
+    return bool(row.get("serviceable"))

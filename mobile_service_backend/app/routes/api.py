@@ -324,6 +324,41 @@ class PincodeCheck(MethodView):
         return {"valid": False, "message": "Please enter a valid 6-digit pincode."}
 
 
+@blp.route("/serviceable_pincodes")
+class ServiceablePincodes(MethodView):
+    """Serviceability check for a pincode.
+
+    This endpoint is used by the frontend "Check" button to determine whether service
+    is available for a specific 6-digit pincode.
+
+    Response shape:
+      { "pincode": "<pin>", "serviceable": true|false }
+    """
+
+    def get(self):
+        """Check whether a pincode is serviceable.
+
+        Query params:
+            pin: Required. 6-digit pincode (digits only).
+
+        Returns:
+            200: JSON { "pincode": "<pin>", "serviceable": true|false }
+            400: If pin is missing/invalid
+            500: If Supabase query fails (safe error message; no stack trace leakage)
+        """
+        pin = (request.args.get("pin") or "").strip()
+        if not _PINCODE_STRICT_REGEX.match(pin):
+            abort(400, message="pin must be exactly 6 digits")
+
+        try:
+            serviceable = bool(db.is_pincode_serviceable(pin))
+            return {"pincode": pin, "serviceable": serviceable}
+        except Exception:
+            # Do not leak internal errors to clients; log server-side only.
+            logger.exception("Failed to check pincode serviceability for pin=%s", pin)
+            abort(500, message="Unable to check service availability right now. Please try again later.")
+
+
 @blp.route("/bookings")
 class Bookings(MethodView):
     """Booking form submission endpoint (hero form)."""
