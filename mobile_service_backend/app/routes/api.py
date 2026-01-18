@@ -446,11 +446,27 @@ class Bookings(MethodView):
             # Defensive fallback.
             return {"code": "ANTI_SPAM_BLOCKED", "message": "Request blocked. Please try again later."}, 429
 
-        new_id = db.create_booking(
-            name=name,
-            phone=normalized_phone,
-            pincode=normalized_pincode,
-        )
+        try:
+            new_id = db.create_booking(
+                name=name,
+                phone=normalized_phone,
+                pincode=normalized_pincode,
+            )
+        except RuntimeError as exc:
+            # Common cause: missing SUPABASE_SERVICE_ROLE_KEY / SUPABASE_URL.
+            # Return a stable JSON error instead of crashing with a 500.
+            logger.exception("BOOKING_CREATE_FAILED runtime_error err_type=%s err=%s", type(exc).__name__, str(exc))
+            return {
+                "code": "BOOKING_PERSISTENCE_NOT_CONFIGURED",
+                "message": "Booking service is temporarily unavailable. Please try again later.",
+            }, 503
+        except Exception as exc:
+            logger.exception("BOOKING_CREATE_FAILED unexpected err_type=%s err=%s", type(exc).__name__, str(exc))
+            return {
+                "code": "BOOKING_CREATE_FAILED",
+                "message": "Unable to create booking right now. Please try again later.",
+            }, 500
+
         return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
 
 
@@ -491,11 +507,25 @@ class BookAlias(MethodView):
                 return {"code": code, "message": msg}, 409
             return {"code": "ANTI_SPAM_BLOCKED", "message": "Request blocked. Please try again later."}, 429
 
-        new_id = db.create_booking(
-            name=name,
-            phone=normalized_phone,
-            pincode=normalized_pincode,
-        )
+        try:
+            new_id = db.create_booking(
+                name=name,
+                phone=normalized_phone,
+                pincode=normalized_pincode,
+            )
+        except RuntimeError as exc:
+            logger.exception("BOOKING_CREATE_FAILED runtime_error err_type=%s err=%s", type(exc).__name__, str(exc))
+            return {
+                "code": "BOOKING_PERSISTENCE_NOT_CONFIGURED",
+                "message": "Booking service is temporarily unavailable. Please try again later.",
+            }, 503
+        except Exception as exc:
+            logger.exception("BOOKING_CREATE_FAILED unexpected err_type=%s err=%s", type(exc).__name__, str(exc))
+            return {
+                "code": "BOOKING_CREATE_FAILED",
+                "message": "Unable to create booking right now. Please try again later.",
+            }, 500
+
         return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
 
 
