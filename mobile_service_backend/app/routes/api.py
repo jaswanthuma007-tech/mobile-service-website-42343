@@ -328,35 +328,58 @@ class PincodeCheck(MethodView):
 class ServiceablePincodes(MethodView):
     """Serviceability check for a pincode.
 
-    This endpoint is used by the frontend "Check" button to determine whether service
+    This endpoint is used by the frontend booking flow to determine whether service
     is available for a specific 6-digit pincode.
 
-    Response shape:
-      { "pincode": "<pin>", "serviceable": true|false }
+    Key contract (per task requirements):
+    - Validates `pin` as exactly 6 numeric digits.
+    - Returns HTTP 200 with `{ "pincode": "<pin>", "serviceable": true|false }`
+      where `false` means "not serviceable OR not found".
+    - Never propagates raw exceptions: failures are mapped to friendly JSON errors
+      so the browser doesn't surface a generic "Failed to fetch".
     """
 
+    # PUBLIC_INTERFACE
     def get(self):
         """Check whether a pincode is serviceable.
 
         Query params:
             pin: Required. 6-digit pincode (digits only).
 
-        Returns:
-            200: JSON { "pincode": "<pin>", "serviceable": true|false }
-            400: If pin is missing/invalid
-            500: If Supabase query fails (safe error message; no stack trace leakage)
+        Success response (always HTTP 200 on successful validation):
+            { "pincode": "<pin>", "serviceable": true|false }
+
+        Error responses (JSON, never raw stack traces):
+            400:
+              { "code": "INVALID_PIN", "message": "pin must be exactly 6 digits" }
+            500:
+              { "code": "SERVICEABILITY_LOOKUP_FAILED",
+                "message": "Unable to check service availability right now. Please try again later." }
         """
         pin = (request.args.get("pin") or "").strip()
+
+        # Requirement: validate a 6-digit numeric pin.
         if not _PINCODE_STRICT_REGEX.match(pin):
-            abort(400, message="pin must be exactly 6 digits")
+            # Use abort to keep flask-smorest response formatting, but provide a stable `code`.
+            abort(400, code="INVALID_PIN", message="pin must be exactly 6 digits")
 
         try:
+            # Requirement: 200 with serviceable false if not found.
             serviceable = bool(db.is_pincode_serviceable(pin))
-            return {"pincode": pin, "serviceable": serviceable}
-        except Exception:
-            # Do not leak internal errors to clients; log server-side only.
-            logger.exception("Failed to check pincode serviceability for pin=%s", pin)
-            abort(500, message="Unable to check service availability right now. Please try again later.")
+            return {"pincode": pin, "serviceable": serviceable}, 200
+        except Exception as exc:
+            # Never leak raw exceptions; log server-side, return friendly JSON.
+            logger.exception(
+                "SERVICEABILITY_LOOKUP_FAILED pin=%s err_type=%s err=%s",
+                pin,
+                type(exc).__name__,
+                str(exc),
+            )
+            abort(
+                500,
+                code="SERVICEABILITY_LOOKUP_FAILED",
+                message="Unable to check service availability right now. Please try again later.",
+            )
 
 
 @blp.route("/bookings")
