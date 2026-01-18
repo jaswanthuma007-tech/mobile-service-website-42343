@@ -107,15 +107,28 @@ def init_schema() -> None:
     """Initialize database layer.
 
     Previously created/ensured SQLite schema. With Supabase/Postgres this function:
-    - verifies configuration is present (fails fast if missing)
-    - attempts a best-effort seed of catalog tables to preserve demo behavior
+    - attempts to validate configuration and perform best-effort seeding
+
+    Important:
+    - This MUST NOT crash the Flask app at import/startup time, otherwise the reverse
+      proxy returns 502 and the browser reports CORS errors (because no headers are
+      added on proxy-level failures).
+    - Endpoints that require Supabase will surface a clear 5xx JSON error if Supabase
+      is not configured.
 
     Note: Creating tables is not performed by the backend; use Supabase SQL editor
     according to assets/supabase.md.
     """
-    # Force client creation early to surface missing env vars at startup.
-    _ = get_supabase_client()
-    _ensure_catalog_seeded()
+    try:
+        # Best-effort: initialize client early and seed catalogs if possible.
+        _ = get_supabase_client()
+        _ensure_catalog_seeded()
+    except Exception:
+        # Do not break startup; routes will return clearer errors at request time.
+        logger.warning(
+            "Supabase is not configured or initialization failed; backend will start but DB-backed endpoints may fail.",
+            exc_info=True,
+        )
 
 
 # PUBLIC_INTERFACE
@@ -325,11 +338,17 @@ def verify_admin_credentials(username: str, password: str) -> bool:
 def is_pincode_serviceable(pincode: str) -> bool:
     """Return whether the given 6-digit pincode is serviceable.
 
-    Queries Supabase table `serviceable_pincodes` by primary key `pincode`.
+    Queries Supabase table `serviceable_pincodes` by pincode.
 
     Expected table shape (see assets/supabase.md):
       - pincode varchar(6) primary key
       - serviceable boolean not null default true
+
+    Robustness notes:
+    - Some Supabase setups may store pincode as numeric or text; we query using the
+      provided 6-digit string and also try an int fallback (best-effort).
+    - We only ever return a boolean; errors are raised for the route layer to map
+      to stable JSON error responses.
 
     Args:
         pincode: 6-digit pincode string (caller must validate format).
@@ -337,16 +356,43 @@ def is_pincode_serviceable(pincode: str) -> bool:
     Returns:
         True if there is a row for the pincode with serviceable=true.
         False if row is missing or explicitly serviceable=false.
+
+    Raises:
+        RuntimeError on Supabase communication/query failures.
     """
-    # Select only the boolean column; limit to 1 for efficiency.
-    rows = _sb_exec(
-        _sb()
-        .table(_table("serviceable_pincodes"))
-        .select("serviceable")
-        .eq("pincode", pincode)
-        .limit(1)
-    )
-    if not rows:
+    try:
+        # Select only the boolean column; limit to 1 for efficiency.
+        rows = _sb_exec(
+            _sb()
+            .table(_table("serviceable_pincodes"))
+            .select("serviceable")
+            .eq("pincode", pincode)
+            .limit(1)
+        )
+        if rows:
+            row = rows[0] or {}
+            return bool(row.get("serviceable"))
+
+        # Best-effort fallback if column type is numeric in a custom schema.
+        # (PostgREST will often coerce automatically, but not always.)
+        try:
+            pin_int = int(pincode)
+        except ValueError:
+            pin_int = None
+
+        if pin_int is not None:
+            rows2 = _sb_exec(
+                _sb()
+                .table(_table("serviceable_pincodes"))
+                .select("serviceable")
+                .eq("pincode", pin_int)
+                .limit(1)
+            )
+            if rows2:
+                row2 = rows2[0] or {}
+                return bool(row2.get("serviceable"))
+
         return False
-    row = rows[0] or {}
-    return bool(row.get("serviceable"))
+    except Exception as exc:
+        # Normalize to RuntimeError so callers can treat as service failure.
+        raise RuntimeError(f"Supabase query failed for serviceable_pincodes: {exc}") from exc

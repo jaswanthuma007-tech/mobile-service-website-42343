@@ -335,8 +335,8 @@ class ServiceablePincodes(MethodView):
     - Validates `pin` as exactly 6 numeric digits.
     - Returns HTTP 200 with `{ "pincode": "<pin>", "serviceable": true|false }`
       where `false` means "not serviceable OR not found".
-    - Never propagates raw exceptions: failures are mapped to friendly JSON errors
-      so the browser doesn't surface a generic "Failed to fetch".
+    - On errors, returns JSON `{ "code": "...", "message": "..." }` with 4xx/5xx.
+    - Never propagates raw exceptions to the client.
     """
 
     # PUBLIC_INTERFACE
@@ -346,10 +346,10 @@ class ServiceablePincodes(MethodView):
         Query params:
             pin: Required. 6-digit pincode (digits only).
 
-        Success response (always HTTP 200 on successful validation):
+        Success response (HTTP 200):
             { "pincode": "<pin>", "serviceable": true|false }
 
-        Error responses (JSON, never raw stack traces):
+        Error responses (stable JSON):
             400:
               { "code": "INVALID_PIN", "message": "pin must be exactly 6 digits" }
             500:
@@ -360,26 +360,38 @@ class ServiceablePincodes(MethodView):
 
         # Requirement: validate a 6-digit numeric pin.
         if not _PINCODE_STRICT_REGEX.match(pin):
-            # Use abort to keep flask-smorest response formatting, but provide a stable `code`.
-            abort(400, code="INVALID_PIN", message="pin must be exactly 6 digits")
+            return {"code": "INVALID_PIN", "message": "pin must be exactly 6 digits"}, 400
 
         try:
             # Requirement: 200 with serviceable false if not found.
             serviceable = bool(db.is_pincode_serviceable(pin))
             return {"pincode": pin, "serviceable": serviceable}, 200
-        except Exception as exc:
-            # Never leak raw exceptions; log server-side, return friendly JSON.
+        except RuntimeError as exc:
+            # Common causes:
+            # - Supabase env vars missing
+            # - table missing / permission issues
             logger.exception(
                 "SERVICEABILITY_LOOKUP_FAILED pin=%s err_type=%s err=%s",
                 pin,
                 type(exc).__name__,
                 str(exc),
             )
-            abort(
-                500,
-                code="SERVICEABILITY_LOOKUP_FAILED",
-                message="Unable to check service availability right now. Please try again later.",
+            return {
+                "code": "SERVICEABILITY_LOOKUP_FAILED",
+                "message": "Unable to check service availability right now. Please try again later.",
+            }, 500
+        except Exception as exc:
+            # Defensive: keep stable shape for any unexpected exceptions.
+            logger.exception(
+                "SERVICEABILITY_LOOKUP_FAILED_UNEXPECTED pin=%s err_type=%s err=%s",
+                pin,
+                type(exc).__name__,
+                str(exc),
             )
+            return {
+                "code": "SERVICEABILITY_LOOKUP_FAILED",
+                "message": "Unable to check service availability right now. Please try again later.",
+            }, 500
 
 
 @blp.route("/bookings")
