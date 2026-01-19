@@ -106,15 +106,30 @@ def _ensure_catalog_seeded() -> None:
 def init_schema() -> None:
     """Initialize database layer.
 
-    Previously created/ensured SQLite schema. With Supabase/Postgres this function:
-    - verifies configuration is present (fails fast if missing)
-    - attempts a best-effort seed of catalog tables to preserve demo behavior
+    This project can run in two modes:
+    1) Supabase configured (preferred persistence): catalog seeding is attempted.
+    2) Supabase NOT configured: initialization is skipped so the Flask app can still boot.
 
-    Note: Creating tables is not performed by the backend; use Supabase SQL editor
-    according to assets/supabase.md.
+    Why:
+      The frontend calls lightweight endpoints (e.g. /api/pincode/check) which should work
+      even when optional persistence isn't configured yet. Crashing at import/startup causes
+      the browser to show generic "Failed to fetch".
+
+    Note:
+      Creating tables is not performed by the backend; use Supabase SQL editor according
+      to assets/supabase.md.
     """
-    # Force client creation early to surface missing env vars at startup.
-    _ = get_supabase_client()
+    try:
+        # Force client creation early to surface missing env vars when configured.
+        _ = get_supabase_client()
+    except Exception:
+        logger.warning(
+            "Supabase is not configured; skipping DB init. "
+            "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to enable persistence.",
+            exc_info=True,
+        )
+        return
+
     _ensure_catalog_seeded()
 
 

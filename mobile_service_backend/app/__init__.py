@@ -15,7 +15,17 @@ app.url_map.strict_slashes = False
 
 # Initialize DB layer at startup.
 # With Supabase/Postgres, this validates configuration and performs best-effort seeding.
-db.init_schema()
+#
+# IMPORTANT:
+# The frontend depends on the backend being up even if Supabase isn't configured yet.
+# So we treat DB init as best-effort and only log failures.
+try:
+    db.init_schema()
+except Exception:
+    # Do not crash the whole API if optional persistence isn't configured.
+    import logging
+
+    logging.getLogger(__name__).exception("DB init failed; continuing without DB-backed features.")
 
 # CORS: Prefer explicit allowed origins from env (comma-separated), fallback to '*'.
 allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*")

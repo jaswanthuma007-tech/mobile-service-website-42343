@@ -16,6 +16,20 @@ def _required_env(name: str) -> str:
 
 
 # PUBLIC_INTERFACE
+def is_supabase_configured() -> bool:
+    """Return True if required Supabase environment variables are present.
+
+    This helper lets the app start in a limited mode when Supabase isn't configured yet.
+    Required env vars:
+      - SUPABASE_URL
+      - SUPABASE_SERVICE_ROLE_KEY
+    """
+    return bool((os.environ.get("SUPABASE_URL") or "").strip()) and bool(
+        (os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
+    )
+
+
+# PUBLIC_INTERFACE
 @lru_cache(maxsize=1)
 def get_supabase_client() -> Client:
     """Return a cached Supabase client.
