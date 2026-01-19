@@ -361,41 +361,53 @@ class ServiceablePincodes(MethodView):
 
 @blp.route("/bookings")
 class Bookings(MethodView):
-    """Booking form submission endpoint (hero form)."""
+    """Booking form submission endpoint.
 
-    @blp.arguments(BookingRequestSchema)
+    IMPORTANT:
+    The frontend "Book a Repair" flow may send `phoneNumber` instead of `phone`,
+    and may send `pincode` as a number. This endpoint accepts both and normalizes.
+    """
+
+    # NOTE: We still use BookingRequestSchema for OpenAPI, but we defensively accept
+    # alternate client keys to avoid 422/500 issues from payload drift.
+    @blp.arguments(BookingRequestSchema, required=False)
     @blp.response(201, BookingResponseSchema)
     def post(self, booking_data):
         """Create a booking.
 
-        Expects JSON body:
-        - name, phone, pincode
-
-        Anti-spam protections:
-        - Per-IP rate limiting (token bucket) with env-configurable limits:
-            * RATE_LIMIT_PER_MINUTE (default 5)
-            * RATE_LIMIT_PER_HOUR (default 50)
-          When exceeded: HTTP 429, JSON: { "code": "RATE_LIMITED", "message": "..." }
-        - Duplicate submission cooldown:
-            * If same name+phone+pincode repeats within DUP_SUBMISSION_COOLDOWN_SECONDS (default 60)
-              respond HTTP 409, JSON: { "code": "DUPLICATE_SUBMISSION", "message": "..." }
-
-        Header signals (log-only):
-        - Missing/suspicious User-Agent or missing Referer are logged but NOT blocked.
-
-        Phone handling:
-        - Phone is normalized by stripping non-digits.
-        - Phone must normalize to exactly 10 digits, otherwise HTTP 400 is returned.
+        Accepts JSON body fields:
+        - name: string
+        - phone: string (10 digits) OR phoneNumber: string (10 digits, may include spaces/dashes)
+        - pincode: string OR number (must normalize to strict 6 digits)
 
         Returns:
-        - id: created booking ID
-        - message: user-facing message
+        - 201 { id, message }
+        - 400 for validation errors (user-facing message)
+        - 409/429 for anti-spam blocks
         """
         _log_suspicious_user_agent_and_referer()
 
-        normalized_phone = _normalize_and_validate_10_digit_phone(booking_data.get("phone") or "")
-        normalized_pincode = _validate_strict_6_digit_pincode(booking_data.get("pincode") or "")
+        # If schema parsing didn't run (required=False) or failed to load, fall back to raw JSON.
+        if not isinstance(booking_data, dict):
+            booking_data = request.get_json(silent=True) or {}
+
         name = (booking_data.get("name") or "").strip()
+
+        # Frontend uses phoneNumber; accept both.
+        phone_in = booking_data.get("phone")
+        if phone_in is None:
+            phone_in = booking_data.get("phoneNumber")
+        phone_raw = "" if phone_in is None else str(phone_in)
+
+        # Tolerate numeric pincodes from clients.
+        pincode_in = booking_data.get("pincode")
+        pincode_raw = "" if pincode_in is None else str(pincode_in)
+
+        normalized_phone = _normalize_and_validate_10_digit_phone(phone_raw)
+        normalized_pincode = _validate_strict_6_digit_pincode(pincode_raw)
+
+        if not name:
+            abort(400, message="name is required.")
 
         allowed, code, msg = enforce_booking_anti_spam(
             ip=_get_client_ip(),
@@ -411,37 +423,60 @@ class Bookings(MethodView):
             # Defensive fallback.
             return {"code": "ANTI_SPAM_BLOCKED", "message": "Request blocked. Please try again later."}, 429
 
-        new_id = db.create_booking(
-            name=name,
-            phone=normalized_phone,
-            pincode=normalized_pincode,
-        )
-        return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
+        try:
+            new_id = db.create_booking(
+                name=name,
+                phone=normalized_phone,
+                pincode=normalized_pincode,
+            )
+            return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
+        except Exception:
+            logger.exception(
+                "create_booking failed ip=%s name_len=%s phone_last2=%s pincode=%s",
+                _get_client_ip(),
+                len(name),
+                normalized_phone[-2:] if normalized_phone else "",
+                normalized_pincode,
+            )
+            abort(500, message="Unable to create booking right now. Please try again later.")
 
 
 @blp.route("/book")
 class BookAlias(MethodView):
-    """Alias endpoint for create booking (matches requested POST /book)."""
+    """Alias endpoint for create booking (matches requested POST /book).
 
-    @blp.arguments(BookingRequestSchema)
+    Accepts `phoneNumber` as well as `phone` for compatibility with the booking UI.
+    """
+
+    @blp.arguments(BookingRequestSchema, required=False)
     @blp.response(201, BookingResponseSchema)
     def post(self, booking_data):
         """Create a booking (alias for /api/bookings).
 
-        Anti-spam protections: see POST /api/bookings (same behavior/codes).
-
-        Phone handling:
-        - Phone is normalized by stripping non-digits.
-        - Phone must normalize to exactly 10 digits, otherwise HTTP 400 is returned.
-
-        Pincode handling:
-        - Pincode must be exactly 6 digits (strict).
+        Payload compatibility:
+        - phone OR phoneNumber
+        - pincode can be string or number
         """
         _log_suspicious_user_agent_and_referer()
 
-        normalized_phone = _normalize_and_validate_10_digit_phone(booking_data.get("phone") or "")
-        normalized_pincode = _validate_strict_6_digit_pincode(booking_data.get("pincode") or "")
+        if not isinstance(booking_data, dict):
+            booking_data = request.get_json(silent=True) or {}
+
         name = (booking_data.get("name") or "").strip()
+
+        phone_in = booking_data.get("phone")
+        if phone_in is None:
+            phone_in = booking_data.get("phoneNumber")
+        phone_raw = "" if phone_in is None else str(phone_in)
+
+        pincode_in = booking_data.get("pincode")
+        pincode_raw = "" if pincode_in is None else str(pincode_in)
+
+        normalized_phone = _normalize_and_validate_10_digit_phone(phone_raw)
+        normalized_pincode = _validate_strict_6_digit_pincode(pincode_raw)
+
+        if not name:
+            abort(400, message="name is required.")
 
         allowed, code, msg = enforce_booking_anti_spam(
             ip=_get_client_ip(),
@@ -456,12 +491,22 @@ class BookAlias(MethodView):
                 return {"code": code, "message": msg}, 409
             return {"code": "ANTI_SPAM_BLOCKED", "message": "Request blocked. Please try again later."}, 429
 
-        new_id = db.create_booking(
-            name=name,
-            phone=normalized_phone,
-            pincode=normalized_pincode,
-        )
-        return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
+        try:
+            new_id = db.create_booking(
+                name=name,
+                phone=normalized_phone,
+                pincode=normalized_pincode,
+            )
+            return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
+        except Exception:
+            logger.exception(
+                "create_booking (alias) failed ip=%s name_len=%s phone_last2=%s pincode=%s",
+                _get_client_ip(),
+                len(name),
+                normalized_phone[-2:] if normalized_phone else "",
+                normalized_pincode,
+            )
+            abort(500, message="Unable to create booking right now. Please try again later.")
 
 
 @blp.route("/booking/<int:booking_id>")
@@ -576,7 +621,17 @@ class BookingRepair(MethodView):
         # Extract likely fields from either flat or nested structures.
         # (Do not log or echo full payload; only log field presence.)
         name_val = _pick_first(payload, [["name"], ["customer", "name"], ["customerDetails", "name"]])
-        phone_val = _pick_first(payload, [["phone"], ["mobile"], ["customer", "phone"], ["customerDetails", "phone"]])
+        phone_val = _pick_first(
+            payload,
+            [
+                ["phone"],
+                ["phoneNumber"],
+                ["phone_number"],
+                ["mobile"],
+                ["customer", "phone"],
+                ["customerDetails", "phone"],
+            ],
+        )
         pincode_val = _pick_first(payload, [["pincode"], ["pin"], ["customer", "pincode"], ["address", "pincode"]])
 
         # Optional booking selections

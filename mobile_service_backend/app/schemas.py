@@ -87,22 +87,22 @@ class PincodeCheckResponseSchema(Schema):
 
 class BookingRequestSchema(Schema):
     name = fields.Str(required=True, validate=validate.Length(min=1), metadata={"description": "Customer name"})
-    # Note: endpoint normalizes by stripping non-digits; this schema ensures that if the
-    # client sends digits-only, it must be exactly 10. Endpoint still enforces 10 digits
-    # post-normalization and returns a fixed HTTP 400 message.
+
+    # IMPORTANT:
+    # The booking UI may send `phoneNumber` instead of `phone`. Route code accepts both,
+    # but for OpenAPI we keep `phone` as the canonical field.
+    #
+    # Also, the route normalizes phone by stripping non-digits; if the client sends
+    # spaces/dashes, we must not fail at schema level. So we only require a non-empty string here.
     phone = fields.Str(
         required=True,
-        validate=validate.Regexp(
-            r"^[0-9]{10}$",
-            error="Only numbers are allowed. Please enter a valid 10-digit mobile number.",
-        ),
-        metadata={"description": "Customer phone (10 digits)"},
+        validate=validate.Length(min=1),
+        metadata={"description": "Customer phone (route normalizes to 10 digits)"},
     )
-    pincode = fields.Str(
-        required=True,
-        validate=validate.Regexp(r"^[0-9]{6}$", error="Pincode must be exactly 6 digits."),
-        metadata={"description": "6-digit pincode"},
-    )
+
+    # Similarly, clients may send pincode as a number. We accept any value that can be coerced
+    # to string and validate strictly in the route.
+    pincode = fields.Raw(required=True, metadata={"description": "6-digit pincode (string or number)"})
 
 
 class BookingResponseSchema(Schema):
