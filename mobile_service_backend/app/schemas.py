@@ -89,20 +89,20 @@ class BookingRequestSchema(Schema):
     name = fields.Str(required=True, validate=validate.Length(min=1), metadata={"description": "Customer name"})
 
     # IMPORTANT:
-    # The booking UI may send `phoneNumber` instead of `phone`. Route code accepts both,
-    # but for OpenAPI we keep `phone` as the canonical field.
+    # Clients may send `phoneNumber` or `phone_number` instead of `phone`. Route code accepts
+    # these aliases, but for OpenAPI we keep `phone` as the canonical field.
     #
     # Also, the route normalizes phone by stripping non-digits; if the client sends
     # spaces/dashes, we must not fail at schema level. So we only require a non-empty string here.
     phone = fields.Str(
         required=True,
         validate=validate.Length(min=1),
-        metadata={"description": "Customer phone (route normalizes to 10 digits)"},
+        metadata={"description": "Customer phone (route normalizes to 10 digits; aliases: phoneNumber, phone_number)"},
     )
 
-    # Similarly, clients may send pincode as a number. We accept any value that can be coerced
-    # to string and validate strictly in the route.
-    pincode = fields.Raw(required=True, metadata={"description": "6-digit pincode (string or number)"})
+    # Similarly, clients may send pincode as a number. The route safely coerces to string
+    # and validates strictly as 6 digits.
+    pincode = fields.Raw(required=True, metadata={"description": "6-digit pincode (string or number; route coerces/validates)"})
 
 
 class BookingResponseSchema(Schema):

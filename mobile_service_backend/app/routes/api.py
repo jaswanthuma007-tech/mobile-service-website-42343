@@ -27,6 +27,86 @@ from ..schemas import (
 
 logger = logging.getLogger(__name__)
 
+
+def _coerce_to_str(value) -> str:
+    """Best-effort conversion of unknown JSON values into a string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _normalize_booking_payload(payload: dict) -> dict:
+    """Normalize booking payload keys and value types.
+
+    Accepts various client-side key names and returns a stable internal shape:
+      { "name": str, "phone": str, "pincode": str }
+
+    Supported aliases:
+      - phone: phone | phoneNumber | phone_number
+      - pincode: pincode | pin
+
+    Notes:
+      - This function only normalizes/coerces types; strict validation is done elsewhere.
+    """
+    if not isinstance(payload, dict):
+        return {"name": "", "phone": "", "pincode": ""}
+
+    # name
+    name = _coerce_to_str(payload.get("name")).strip()
+
+    # phone aliases
+    phone_val = payload.get("phone")
+    if phone_val is None:
+        phone_val = payload.get("phoneNumber")
+    if phone_val is None:
+        phone_val = payload.get("phone_number")
+    phone = _coerce_to_str(phone_val).strip()
+
+    # pincode aliases (allow numbers)
+    pincode_val = payload.get("pincode")
+    if pincode_val is None:
+        pincode_val = payload.get("pin")
+    pincode = _coerce_to_str(pincode_val).strip()
+
+    return {"name": name, "phone": phone, "pincode": pincode}
+
+
+# PUBLIC_INTERFACE
+def _safe_get_json_object() -> dict:
+    """Safely parse request JSON and return a dict.
+
+    Behavior:
+      - Returns {} if body is empty or not JSON (silent=True).
+      - If client sends JSON as a string (e.g. "{...}"), attempts to parse it.
+      - Never raises raw parsing exceptions to callers; aborts with 415 if JSON is invalid.
+    """
+    try:
+        payload = request.get_json(silent=True)
+    except Exception:
+        # Defensive: if Flask/json lib throws, return a safe error.
+        abort(415, message="Request body must be valid JSON.")
+
+    if payload is None:
+        return {}
+
+    if isinstance(payload, str):
+        import json
+
+        try:
+            parsed = json.loads(payload)
+        except Exception:
+            abort(415, message="Request body must be valid JSON.")
+        if not isinstance(parsed, dict):
+            abort(415, message="Request body must be a JSON object.")
+        return parsed
+
+    if not isinstance(payload, dict):
+        abort(415, message="Request body must be a JSON object.")
+
+    return payload
+
 blp = Blueprint("Mobile Service API", "mobile_service_api", url_prefix="/api", description="Mobile Service Website APIs")
 
 _PHONE_INVALID_MESSAGE = "Only numbers are allowed. Please enter a valid 10-digit mobile number."
@@ -364,8 +444,10 @@ class Bookings(MethodView):
     """Booking form submission endpoint.
 
     IMPORTANT:
-    The frontend "Book a Repair" flow may send `phoneNumber` instead of `phone`,
-    and may send `pincode` as a number. This endpoint accepts both and normalizes.
+    The frontend "Book a Repair" flow may send:
+    - `phoneNumber` or `phone_number` instead of `phone`
+    - `pincode` as a number
+    This endpoint accepts and normalizes these variations.
     """
 
     # NOTE: We still use BookingRequestSchema for OpenAPI, but we defensively accept
@@ -377,37 +459,40 @@ class Bookings(MethodView):
 
         Accepts JSON body fields:
         - name: string
-        - phone: string (10 digits) OR phoneNumber: string (10 digits, may include spaces/dashes)
+        - phone: string (10 digits) OR phoneNumber/phone_number
         - pincode: string OR number (must normalize to strict 6 digits)
 
         Returns:
         - 201 { id, message }
         - 400 for validation errors (user-facing message)
         - 409/429 for anti-spam blocks
+        - 415 for invalid JSON bodies
         """
         _log_suspicious_user_agent_and_referer()
 
-        # If schema parsing didn't run (required=False) or failed to load, fall back to raw JSON.
+        # If schema parsing didn't run (required=False) or client uses alternate keys,
+        # we fall back to safe JSON parsing and normalize ourselves.
         if not isinstance(booking_data, dict):
-            booking_data = request.get_json(silent=True) or {}
+            booking_data = _safe_get_json_object()
 
-        name = (booking_data.get("name") or "").strip()
+        normalized_payload = _normalize_booking_payload(booking_data)
 
-        # Frontend uses phoneNumber; accept both.
-        phone_in = booking_data.get("phone")
-        if phone_in is None:
-            phone_in = booking_data.get("phoneNumber")
-        phone_raw = "" if phone_in is None else str(phone_in)
+        # Validate name is a string-ish value with reasonable length.
+        name = normalized_payload["name"]
+        if not name:
+            abort(400, message="name is required.")
+        if len(name) > 120:
+            abort(400, message="name is too long (max 120 characters).")
 
-        # Tolerate numeric pincodes from clients.
-        pincode_in = booking_data.get("pincode")
-        pincode_raw = "" if pincode_in is None else str(pincode_in)
+        phone_raw = normalized_payload["phone"]
+        if not phone_raw:
+            abort(400, message="phoneNumber is required.")
+        pincode_raw = normalized_payload["pincode"]
+        if not pincode_raw:
+            abort(400, message="pincode is required.")
 
         normalized_phone = _normalize_and_validate_10_digit_phone(phone_raw)
         normalized_pincode = _validate_strict_6_digit_pincode(pincode_raw)
-
-        if not name:
-            abort(400, message="name is required.")
 
         allowed, code, msg = enforce_booking_anti_spam(
             ip=_get_client_ip(),
@@ -445,7 +530,7 @@ class Bookings(MethodView):
 class BookAlias(MethodView):
     """Alias endpoint for create booking (matches requested POST /book).
 
-    Accepts `phoneNumber` as well as `phone` for compatibility with the booking UI.
+    Accepts `phoneNumber`/`phone_number` as well as `phone` for compatibility with clients.
     """
 
     @blp.arguments(BookingRequestSchema, required=False)
@@ -454,29 +539,31 @@ class BookAlias(MethodView):
         """Create a booking (alias for /api/bookings).
 
         Payload compatibility:
-        - phone OR phoneNumber
+        - phone OR phoneNumber OR phone_number
         - pincode can be string or number
         """
         _log_suspicious_user_agent_and_referer()
 
         if not isinstance(booking_data, dict):
-            booking_data = request.get_json(silent=True) or {}
+            booking_data = _safe_get_json_object()
 
-        name = (booking_data.get("name") or "").strip()
+        normalized_payload = _normalize_booking_payload(booking_data)
 
-        phone_in = booking_data.get("phone")
-        if phone_in is None:
-            phone_in = booking_data.get("phoneNumber")
-        phone_raw = "" if phone_in is None else str(phone_in)
+        name = normalized_payload["name"]
+        if not name:
+            abort(400, message="name is required.")
+        if len(name) > 120:
+            abort(400, message="name is too long (max 120 characters).")
 
-        pincode_in = booking_data.get("pincode")
-        pincode_raw = "" if pincode_in is None else str(pincode_in)
+        phone_raw = normalized_payload["phone"]
+        if not phone_raw:
+            abort(400, message="phoneNumber is required.")
+        pincode_raw = normalized_payload["pincode"]
+        if not pincode_raw:
+            abort(400, message="pincode is required.")
 
         normalized_phone = _normalize_and_validate_10_digit_phone(phone_raw)
         normalized_pincode = _validate_strict_6_digit_pincode(pincode_raw)
-
-        if not name:
-            abort(400, message="name is required.")
 
         allowed, code, msg = enforce_booking_anti_spam(
             ip=_get_client_ip(),
