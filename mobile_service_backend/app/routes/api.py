@@ -514,7 +514,11 @@ class Bookings(MethodView):
                 phone=normalized_phone,
                 pincode=normalized_pincode,
             )
-            return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
+            return {
+                "id": new_id,
+                "message": "Booking received! Our team will contact you shortly.",
+                "next_step": {"type": "redirect", "url": f"/booking/{new_id}/brand"},
+            }
         except Exception:
             logger.exception(
                 "create_booking failed ip=%s name_len=%s phone_last2=%s pincode=%s",
@@ -584,7 +588,11 @@ class BookAlias(MethodView):
                 phone=normalized_phone,
                 pincode=normalized_pincode,
             )
-            return {"id": new_id, "message": "Booking received! Our team will contact you shortly."}
+            return {
+                "id": new_id,
+                "message": "Booking received! Our team will contact you shortly.",
+                "next_step": {"type": "redirect", "url": f"/booking/{new_id}/brand"},
+            }
         except Exception:
             logger.exception(
                 "create_booking (alias) failed ip=%s name_len=%s phone_last2=%s pincode=%s",

@@ -105,9 +105,21 @@ class BookingRequestSchema(Schema):
     pincode = fields.Raw(required=True, metadata={"description": "6-digit pincode (string or number; route coerces/validates)"})
 
 
+class BookingNextStepSchema(Schema):
+    type = fields.Str(required=True, metadata={"description": "Next-step type (e.g., redirect)"})
+    url = fields.Str(required=True, metadata={"description": "URL to navigate to for the next step"})
+    label = fields.Str(required=False, allow_none=True, metadata={"description": "Optional UI label for the next step"})
+
+
 class BookingResponseSchema(Schema):
     id = fields.Int(required=True, metadata={"description": "Created booking ID"})
     message = fields.Str(required=True, metadata={"description": "User-facing success message"})
+    next_step = fields.Nested(
+        BookingNextStepSchema,
+        required=False,
+        allow_none=True,
+        metadata={"description": "Optional next-step guidance for clients (e.g., redirect URL)"},
+    )
 
 
 class BookingRepairResponseSchema(BookingResponseSchema):
