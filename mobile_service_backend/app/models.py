@@ -5,9 +5,10 @@ This file is intentionally self-contained and does not change the existing Supab
 db.py module. It provides Flask-SQLAlchemy models requested by the task.
 
 Important:
-- The existing backend currently uses supabase-py and PostgREST for persistence.
-- These models are for an ORM-based setup (e.g., SQLite/Postgres via SQLAlchemy).
-- Integration into runtime (init_app, migrations) is out of scope for this task request.
+- The backend can run with Supabase persistence OR local SQLite persistence.
+- Runtime SQLite persistence is implemented in `app/persistence.py` (minimal models + table ensure/seed).
+- This file provides a richer ORM model set for a broader "management system" schema and can be used
+  later for migrations/admin tooling, but is not currently wired into the Flask app runtime.
 """
 
 from __future__ import annotations

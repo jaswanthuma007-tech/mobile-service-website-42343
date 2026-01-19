@@ -6,7 +6,7 @@ from flask import request
 from flask.views import MethodView
 from flask_smorest import Blueprint, abort
 
-from .. import db
+from .. import persistence as db
 from ..anti_spam import enforce_booking_anti_spam
 from ..schemas import (
     AboutResponseSchema,

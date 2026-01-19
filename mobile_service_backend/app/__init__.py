@@ -4,7 +4,7 @@ from flask import Flask
 from flask_cors import CORS
 from flask_smorest import Api
 
-from . import db
+from . import persistence as db
 from .routes.api import blp as api_blp
 from .routes.admin_tracking import blp as admin_tracking_blp
 from .routes.health import blp as health_blp
