@@ -498,6 +498,157 @@ class BookingUpdate(MethodView):
         return {"booking": updated}
 
 
+@blp.route("/booking/repair")
+class BookingRepair(MethodView):
+    """Booking repair endpoint (defensive).
+
+    This endpoint is intended to accept the booking repair flow payloads that may vary
+    between clients/versions and normalize them into a booking row.
+
+    Key behaviors:
+    - Accepts JSON bodies with either flat fields or nested objects.
+    - Tolerates stringified JSON in the request body (e.g., body sent as a JSON string).
+    - Validates phone (normalizes to 10 digits) and pincode (strict 6 digits).
+    - Inserts a booking row and then updates optional brand/model/service fields.
+    - Returns safe, user-facing errors (no stack trace leakage).
+    """
+
+    def post(self):
+        """Create/repair a booking request.
+
+        Returns:
+            201: { "id": <booking_id>, "message": "..." }
+            400: For validation errors with a user-facing message
+            415: If body is not valid JSON
+            500: Only for unexpected server issues (safe message)
+        """
+        # PUBLIC_INTERFACE
+        def _is_nonempty_str(v) -> bool:
+            """Return True if v is a non-empty string after stripping."""
+            return isinstance(v, str) and bool(v.strip())
+
+        def _coerce_to_str(v) -> str:
+            """Best-effort convert unknown values to string."""
+            if v is None:
+                return ""
+            if isinstance(v, str):
+                return v
+            return str(v)
+
+        def _safe_json() -> dict:
+            """Parse JSON body safely, tolerating stringified JSON."""
+            payload = request.get_json(silent=True)
+            if payload is None:
+                abort(415, message="Request body must be JSON.")
+
+            # Some clients accidentally send JSON as a string: "{...}"
+            if isinstance(payload, str):
+                import json
+
+                try:
+                    parsed = json.loads(payload)
+                except Exception:
+                    abort(415, message="Request body must be valid JSON.")
+                if not isinstance(parsed, dict):
+                    abort(415, message="Request body must be a JSON object.")
+                return parsed
+
+            if not isinstance(payload, dict):
+                abort(415, message="Request body must be a JSON object.")
+            return payload
+
+        def _pick_first(payload: dict, paths: list[list[str]]) -> object | None:
+            """Pick the first existing value at one of the given key paths."""
+            for path in paths:
+                cur: object = payload
+                ok = True
+                for key in path:
+                    if not isinstance(cur, dict) or key not in cur:
+                        ok = False
+                        break
+                    cur = cur.get(key)
+                if ok:
+                    return cur
+            return None
+
+        payload = _safe_json()
+
+        # Extract likely fields from either flat or nested structures.
+        # (Do not log or echo full payload; only log field presence.)
+        name_val = _pick_first(payload, [["name"], ["customer", "name"], ["customerDetails", "name"]])
+        phone_val = _pick_first(payload, [["phone"], ["mobile"], ["customer", "phone"], ["customerDetails", "phone"]])
+        pincode_val = _pick_first(payload, [["pincode"], ["pin"], ["customer", "pincode"], ["address", "pincode"]])
+
+        # Optional booking selections
+        brand_val = _pick_first(payload, [["brand"], ["device", "brand"], ["deviceSelection", "brand"]])
+        model_val = _pick_first(payload, [["model"], ["device", "model"], ["deviceSelection", "model"]])
+        service_val = _pick_first(payload, [["service"], ["services"], ["repair", "service"], ["repair", "services"]])
+
+        name = _coerce_to_str(name_val).strip()
+        phone_raw = _coerce_to_str(phone_val).strip()
+        pincode_raw = _coerce_to_str(pincode_val).strip()
+
+        if not name:
+            abort(400, message="name is required.")
+        if not phone_raw:
+            abort(400, message="phone is required.")
+        if not pincode_raw:
+            abort(400, message="pincode is required.")
+
+        try:
+            normalized_phone = _normalize_and_validate_10_digit_phone(phone_raw)
+            normalized_pincode = _validate_strict_6_digit_pincode(pincode_raw)
+        except Exception:
+            # abort() raises an HTTPException; let flask-smorest handle it.
+            raise
+
+        # Normalize optional strings.
+        brand = _coerce_to_str(brand_val).strip() if _is_nonempty_str(_coerce_to_str(brand_val)) else None
+        model = _coerce_to_str(model_val).strip() if _is_nonempty_str(_coerce_to_str(model_val)) else None
+
+        # Services may arrive as list/str; normalize to comma-separated string.
+        service: str | None
+        if isinstance(service_val, list):
+            parts = [str(x).strip() for x in service_val if str(x).strip()]
+            service = ", ".join(parts) if parts else None
+        else:
+            s = _coerce_to_str(service_val).strip()
+            service = s if s else None
+
+        logger.info(
+            "booking_repair_request received ip=%s has_brand=%s has_model=%s has_service=%s",
+            _get_client_ip(),
+            bool(brand),
+            bool(model),
+            bool(service),
+        )
+
+        try:
+            # Insert base booking record
+            booking_id = db.create_booking(name=name, phone=normalized_phone, pincode=normalized_pincode)
+
+            # Apply optional selections if present
+            if brand or model or service:
+                db.update_booking_device_selection(
+                    booking_id=int(booking_id),
+                    brand=brand,
+                    model=model,
+                    service=service,
+                )
+
+            return {"id": int(booking_id), "message": "Booking received! Our team will contact you shortly."}, 201
+        except Exception:
+            # Log server-side with stack trace; do not leak to client.
+            logger.exception(
+                "booking_repair_request failed ip=%s name_len=%s phone_last2=%s pincode=%s",
+                _get_client_ip(),
+                len(name),
+                normalized_phone[-2:] if normalized_phone else "",
+                normalized_pincode,
+            )
+            abort(500, message="Unable to create booking right now. Please try again later.")
+
+
 @blp.route("/admin/bookings")
 class AdminBookings(MethodView):
     """Admin endpoint to list recent bookings."""

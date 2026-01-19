@@ -110,6 +110,10 @@ class BookingResponseSchema(Schema):
     message = fields.Str(required=True, metadata={"description": "User-facing success message"})
 
 
+class BookingRepairResponseSchema(BookingResponseSchema):
+    """Response schema for booking repair endpoint (same shape as booking create)."""
+
+
 class BookingUpdateRequestSchema(Schema):
     brand = fields.Str(required=False, allow_none=True, metadata={"description": "Selected device brand"})
     model = fields.Str(required=False, allow_none=True, metadata={"description": "Selected device model"})
